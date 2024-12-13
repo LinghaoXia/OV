@@ -20,7 +20,7 @@ setwd('~/rawdata')
 gene = "L2HGDH"
 outdir = paste0("~/OV/",gene)
 
-load("~/rawdata/PAAD/PAAD_tpm.RData")
+load("~/rawdata/LUAD/LUAD_tpm.RData")
 # 考虑到部分基因有多个对应关系，需要进一步处理（保留作者给定的gene symbol）
 genes_info <- easier:::reannotate_genes(cur_genes = colnames(data_tpm))
 
@@ -57,7 +57,7 @@ if(length(newnames_dup)!=0){
 }
 
 data_tpm <- as.data.frame(t(data_tpm))
-save(data_tpm,file="~/rawdata/PAAD/PAAD_tpm_immune.RData")
+save(data_tpm,file="~/rawdata/LUAD/LUAD_tpm_immune.RData")
 
 
 
@@ -72,7 +72,7 @@ setwd('~/rawdata')
 gene = "L2HGDH"
 outdir = paste0("~/OV/",gene)
 
-load("~/rawdata/PAAD/PAAD_tpm_immune.RData")
+load("~/rawdata/LUAD/LUAD_tpm_immune.RData")
 ##hallmarkers
 hallmarks_of_immune_response <- c("CYT", "Roh_IS", "chemokines", "Davoli_IS", "IFNy", "Ayers_expIS", "Tcell_inflamed", "RIR", "TLS")
 immune_response_scores <- compute_scores_immune_response(RNA_tpm = data_tpm, 
@@ -99,7 +99,7 @@ setwd('~/rawdata')
 gene = "L2HGDH"
 outdir = paste0("~/OV/",gene)
 
-load("~/rawdata/PAAD/PAAD_tpm_immune.RData")
+load("~/rawdata/LUAD/LUAD_tpm_immune.RData")
 ##quanTIseq
 cell_fractions <- compute_cell_fractions(RNA_tpm = data_tpm)
 colnames(cell_fractions)[8] <- "CD8 T"
@@ -126,7 +126,7 @@ for(i in cell){
   }
 }
 #输出相关性结果文件
-write.table(file=paste0(outdir,"/PAAD-","CELL-corResult.txt"), outTab, sep="\t", quote=F, row.names=F) 
+write.table(file=paste0(outdir,"/LUAD-","CELL-corResult.txt"), outTab, sep="\t", quote=F, row.names=F) 
 
 
 ##相关性矩阵
@@ -138,7 +138,7 @@ data <- na.omit(data)
 M=cor(data)
 
 #绘制相关性图形
-pdf(file=paste0(outdir,"/PAAD-","CELL-corpot.pdf"),width=7,height=7) 
+pdf(file=paste0(outdir,"/LUAD-","CELL-corpot.pdf"),width=7,height=7) 
 # 绘制相关性矩阵的热图
 corrplot(M,           # 相关性矩阵
          method = "circle",          # 使用圆圈的方式来绘制热图
@@ -160,8 +160,13 @@ Cox_Plot <- function(cell){
             cor.coef.size = 4)
 }
 
-cox_list <- lapply(as.vector(outTab[,2]), Cox_Plot)
-pdf(file = paste0(outdir,"/PAAD-","CELL-corpot2.pdf"),width = 17,height = 10)
+if("CD8 T" %in% as.vector(outTab[,2])){
+  cox_list <- lapply(as.vector(outTab[,2]), Cox_Plot)
+}else {
+  
+  cox_list <- lapply(c("CD8 T",as.vector(outTab[,2])), Cox_Plot)
+}
+pdf(file = paste0(outdir,"/LUAD-","CELL-corpot2.pdf"),width = 17,height = 10)
 plot_grid(plotlist = cox_list, align = "h",ncol = 3)
 dev.off()
 
@@ -178,7 +183,7 @@ setwd('~/rawdata')
 gene = "L2HGDH"
 outdir = paste0("~/OV/",gene)
 
-load("~/rawdata/PAAD/PAAD_tpm_immune.RData")
+load("~/rawdata/LUAD/LUAD_tpm_immune.RData")
 # 考虑到部分通路相关基因可能被纳入计算免疫反应评分，
 # 因此参数remove_sig_genes_immune_response  设置为True， 去除这部分重复基因进行计算，
 # 初次使用可以尝试使用效果。
@@ -196,7 +201,7 @@ setwd('~/rawdata')
 gene = "L2HGDH"
 outdir = paste0("~/OV/",gene)
 
-load("~/rawdata/PAAD/PAAD_tpm_immune.RData")
+load("~/rawdata/LUAD/LUAD_tpm_immune.RData")
 tf_activities <- compute_TF_activity(RNA_tpm = RNA_tpm)
 
 ##### 配体-受体分析与细胞互作 #####
@@ -210,16 +215,16 @@ setwd('~/rawdata')
 gene = "L2HGDH"
 outdir = paste0("~/OV/",gene)
 
-load("~/rawdata/PAAD/PAAD_tpm_immune.RData")
+load("~/rawdata/LUAD/LUAD_tpm_immune.RData")
 #> lrpair_weights 是个data.frame
 lrpair_weights <- compute_LR_pairs(RNA_tpm = RNA_tpm,
-                                   cancer_type = "PAAD")
+                                   cancer_type = "LUAD")
 #> LR signature genes found in data set: 629/644 (97.7%)
 #> Ligand-Receptor pair weights computed 
 head(lrpair_weights)[,1:5]
 #根据上一步量化细胞间的关联强度
 ccpair_scores <- compute_CC_pairs(lrpairs = lrpair_weights, 
-                                  cancer_type = "PAAD")
+                                  cancer_type = "LUAD")
 head(ccpair_scores) 
 
 
@@ -239,7 +244,7 @@ setwd('~/rawdata')
 gene = "L2HGDH"
 outdir = paste0("~/OV/",gene)
 
-load("~/rawdata/PAAD/PAAD_tpm_immune.RData")
+load("~/rawdata/LUAD/LUAD_tpm_immune.RData")
 checkpoint <- fread("~/rawdata/Immune/checkpoint.csv")
 
 data_tpm <- as.data.frame(t(data_tpm))
@@ -263,18 +268,22 @@ for(i in checkpoint$`Check-point`){
   }
 }
 #输出相关性结果文件
-write.table(file=paste0(outdir,"/PAAD-","Checkpoint-corResult.txt"), outTab, sep="\t", quote=F, row.names=F) 
+write.table(file=paste0(outdir,"/LUAD-","Checkpoint-corResult.txt"), outTab, sep="\t", quote=F, row.names=F) 
 
 
 ##相关性矩阵
 # 重新组织数据矩阵，提取目标基因和之前筛选出来的相关基因的表达数据
-data=data_tpm[,c(gene, as.vector(outTab[,2]))]
+if("CD274" %in% outTab$Gene){
+  data=data_tpm[,c(gene, outTab$Gene)]
+}else {
+  data=data_tpm[,c(gene, "CD274",outTab$Gene)]
+}
 # 计算新的数据矩阵的相关性矩阵
 data <- na.omit(data)
 M=cor(data)
 
 #绘制相关性图形
-pdf(file=paste0(outdir,"/PAAD-","Checkpoint-corpot.pdf"),width=7,height=7) 
+pdf(file=paste0(outdir,"/LUAD-","Checkpoint-corpot.pdf"),width=7,height=7) 
 # 绘制相关性矩阵的热图
 corrplot(M,           # 相关性矩阵
          method = "circle",          # 使用圆圈的方式来绘制热图
@@ -296,8 +305,12 @@ Cox_Plot <- function(checkpoint){
             cor.coef.size = 4)
 }
 
-cox_list <- lapply(outTab$Gene, Cox_Plot)
-pdf(file = paste0(outdir,"/PAAD-","Checkpoint-corpot2.pdf"),width = 17,height = 10)
+if("CD274" %in% outTab$Gene){
+  cox_list <- lapply(outTab$Gene, Cox_Plot)
+}else {
+  cox_list <- lapply(c("CD274",outTab$Gene), Cox_Plot)
+}
+pdf(file = paste0(outdir,"/LUAD-","Checkpoint-corpot2.pdf"),width = 17,height = 10)
 
 plots_per_page <- 6
 total_plots <- length(cox_list)
