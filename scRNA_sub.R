@@ -126,7 +126,7 @@ ego_BP@result$Description <- substring(ego_BP@result$Description,1,30)
 p_BP <- barplot(ego_BP,showCategory = 10) + ggtitle("barplot for Biological process")
 p_CC <- barplot(ego_CC,showCategory = 10) + ggtitle("barplot for Cellular component")
 p_MF <- barplot(ego_MF,showCategory = 10) + ggtitle("barplot for Molecular function")
-plotc1 <- p_BP/p_CC/p_MF
+plotc1 <- p_BP/p_MF #/p_CC
 
 #KEGG GeneRatio表示差异基因所占比例
 genelist <- bitr(row.names(sig_dge.cluster), fromType="SYMBOL",
@@ -134,8 +134,8 @@ genelist <- bitr(row.names(sig_dge.cluster), fromType="SYMBOL",
 # kegg分析的基因名必须要是ENTREZID
 genelist <- pull(genelist,ENTREZID)               
 ekegg <- enrichKEGG(gene = genelist, organism = 'hsa') #hsa是人类，mmu是小鼠
-p1 <- barplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str_wrap(x, width = 35))
-p2 <- dotplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str_wrap(x, width = 35))
+p1 <- barplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str_wrap(x, width = 35))+ggtitle("KEGG")
+p2 <- dotplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str_wrap(x, width = 35))+ggtitle("KEGG")
 plotc2 = p1/p2
 
 pdf(paste0(outdir,"/","06-",gene,"-epi_GO&KEGG.pdf"),height=8,width=12)
