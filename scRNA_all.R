@@ -392,7 +392,7 @@ setwd('~/rawdata')
 gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
-load("~/rawdata/scRNA_virus/virus_PD1/virus_PD1_anno.RData")
+load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
 # ##病毒早期基因比例
 # early_viral_genes <- c("VG161-UL4","VG161-UL5","VG161-UL8","VG161-UL11","VG161-UL12","VG161-UL13","VG161-UL14",
 #                        "VG161-UL22","VG161-UL23","VG161-UL29",
@@ -428,14 +428,14 @@ sce <- VirTranscript(sce,viral_genes)
 
 ##病毒总基因比例
 viral_genes <-  rownames(sce@assays$SCT)[grep("VG161", rownames(sce@assays$SCT))]
-sce[["VG161"]] <- PercentageFeatureSet(sce,features = viral_genes)
+sce[["VG161"]] <- PercentageFeatureSet(sce,pattern = c("^VG161-UL","^VG161-ICP"))
 VlnPlot(sce, features = "VG161",group.by = "group")
 
-# sce_Vehicle <- subset(sce,group=="Vehicle")
-# threshold <- max(sce_Vehicle[["VG161"]])
+sce_Vehicle <- subset(sce,group=="Vehicle")
+threshold <- max(sce_Vehicle[["VG161"]])
 # VlnPlot(sce_Vehicle, features = "VG161",group.by = "celltype",y.max = 0.18)
 
-sce@meta.data$infected <- ifelse(grepl("VG161",sce@meta.data$orig.ident),ifelse(sce[["VG161"]]>0, "Infected", "Bystander"),"Naive")
+sce@meta.data$infected <- ifelse(grepl("VG161",sce@meta.data$orig.ident),ifelse(sce[["VG161"]]>threshold, "Infected", "Bystander"),"Naive")
 
 pdf(paste0(outdir,"/","03-",gene,"-infected.pdf"),height=20,width=12)
 VlnPlot(sce, features = "VG161",group.by = "group")
