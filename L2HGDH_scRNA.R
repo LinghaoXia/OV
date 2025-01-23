@@ -80,6 +80,10 @@ plan("multisession", workers = 16)
 options(future.globals.maxSize= 1024^4)
 plan()
 rm(list=ls())
+
+setwd('~/rawdata')
+gene = "L2HGDH"
+outdir = paste0("~/OV/",gene)
 ##virus_3D
 load("~/rawdata/L2HGDH_scRNA/uninjected/uninjected.RDS")
 ###########SCTransform V2标准化质控降维
@@ -123,7 +127,7 @@ sce=FindClusters(sce,resolution = 0.5)#需要对粒度进行调整
 #保存结果
 #sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),'VG161','Vehicle')
 #sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),ifelse(grepl("_L",sce@meta.data$orig.ident),"VG161_L","VG161_R"),'Vehicle')
-sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),ifelse(grepl("_L",sce@meta.data$orig.ident),"PD1_VG161_L","PD1_VG161_R"),'PD1')
+sce@meta.data$group <- ifelse (grepl("VG21",sce@meta.data$orig.ident),'VG21',ifelse(grepl("PBS",sce@meta.data$orig.ident),"PBS","S"))
 
 pdf(paste0(outdir,"/","01-",gene,"-cluster_sample.pdf"),height=10,width=6)
 DimPlot(sce, reduction = "umap", group.by = "group",label = TRUE,repel = T, pt.size = .1)
@@ -144,7 +148,11 @@ library(patchwork)
 rm(list=ls())
 gc()
 
-load("~/rawdata/L2HGDH_scRNA/uninjected/uninjected_cluster.RData")
+setwd('~/rawdata')
+gene = "L2HGDH"
+outdir = paste0("~/OV/",gene)
+
+load("~/rawdata/L2HGDH_scRNA/injected/injected_cluster.RData")
 ##详细
 # read.gmt=function(filename){
 #   if(! file.exists(filename)) stop('File ',filename,' not available\n')
@@ -164,11 +172,11 @@ load("~/rawdata/L2HGDH_scRNA/uninjected/uninjected_cluster.RData")
 
 ##模糊
 #细胞类型marker列表
-DC <- c("Batf3","Irf8")
-Macrophage <- c("Itgam","Adgre1")
-Bcell <- c("Blk","Cd19","Casp3","Cd27","Cd5","Cd69","Cd83")
+DC <- c("Batf3","Irf8","Itgax","H2-DMb1","H2-Ab1")
+Macrophage <- c("Itgam","Adgre1","Cd68")
+Bcell <- c("Ms4a1","Cd19","Igalpha")
 Tcell <- c("Cd3d","Cd3e","Cd81","Rora","Stat3","Tgfb1")
-Monocyte <- c("Cd14","Cd16")
+Monocyte <- c("Itgam","Cd14","Cd16")
 
 
 markers <- list(Tcell= Tcell,
@@ -192,7 +200,7 @@ DimPlot(sce, reduction = "umap",
         group.by = "celltype",
         label = TRUE, label.size = 3, repel = TRUE)
 dev.off()
-save(sce,file = "~/rawdata/L2HGDH_scRNA/uninjected/uninjected_anno.RData")
+save(sce,file = "~/rawdata/L2HGDH_scRNA/injected/injected_anno.RData")
 
 ##### 细胞比例 #####
 library(Seurat)
@@ -202,14 +210,14 @@ rm(list=ls())
 gc()
 
 setwd('~/rawdata')
-gene = "scRNA_virus"
+gene = "L2HGDH"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/L2HGDH_scRNA/uninjected/uninjected_anno.RData")
+load("~/rawdata/L2HGDH_scRNA/injected/injected_anno.RData")
 table(sce$group)#查看各组细胞数
 prop.table(table(sce$celltype))
-table(sce$infected, sce$group)#各组不同细胞群细胞数
+table(sce$celltype, sce$group)#各组不同细胞群细胞数
 
 
 pdf(paste0(outdir,"/","02-",gene,"-anno_ratio.pdf"),height=8,width=12)
@@ -263,6 +271,7 @@ for(group_ in sce_groups){
   print(cellper_$median)
   
   pp1 = ggplot(cellper_,aes(x=group,y=percent)) + #ggplot作图
+    scale_y_continuous(expand =  expansion(mult = c(0, 0.05)),limits = c(0, NA))+
     geom_jitter(shape = 21,aes(fill=group),width = 0.25) + 
     stat_summary(fun=mean, geom="point", color="grey60") +
     theme_cowplot() +
@@ -280,5 +289,512 @@ plot_grid(pplist[[1]],
           pplist[[3]],
           pplist[[4]],
           pplist[[5]])
+
+dev.off()
+
+
+
+##### T细胞亚群聚类 #####
+library(Seurat)
+library(SeuratData)
+library(patchwork)
+library(dplyr)
+library(ggplot2)
+library(harmony)
+library(sctransform)
+library(future)
+library(glmGamPoi)
+plan("multisession", workers = 16)
+options(future.globals.maxSize= 1024^4)
+plan()
+rm(list=ls())
+gc()
+
+setwd('~/rawdata')
+gene = "scRNA_virus"
+outdir = paste0("~/OV/",gene)
+##virus_3D
+load("~/rawdata/L2HGDH_scRNA/uninjected/uninjected_anno.RData")
+
+###提取亚群
+sce <- subset(sce, celltype=="Tcell")
+###降维
+DefaultAssay(sce) <- "RNA"
+sce <- NormalizeData(sce, normalization.method = "LogNormalize", scale.factor = 1e4) 
+sce <- FindVariableFeatures(sce, selection.method = 'vst', nfeatures = 2000)
+sce <- ScaleData(sce, vars.to.regress = "percent.mt")
+sce <- RunPCA(sce, features = VariableFeatures(object = sce)) 
+
+sce <- FindNeighbors(sce, dims = 1:10)
+sce <- FindClusters(sce, resolution = 0.5)
+sce <- RunUMAP(sce, dims = 1:10)
+pdf(paste0(outdir,"/","03-",gene,"-Tcell_cluster.pdf"),height=10,width=6)
+DimPlot(sce, reduction = 'umap', group.by = 'seurat_clusters',label = TRUE, pt.size = 0.5)
+dev.off()
+
+save(sce,file = "~/rawdata/L2HGDH_scRNA/uninjected/uninjected_tcell.RData")
+
+
+##### T细胞亚群注释 #####
+library(Seurat) 
+library(ggplot2)
+library(dplyr)
+library(scRNAtoolVis)
+rm(list=ls())
+gc()
+
+setwd('~/rawdata')
+gene = "L2HGDH"
+outdir = paste0("~/OV/",gene)
+
+load("~/rawdata/L2HGDH_scRNA/uninjected/uninjected_tcell.RData")
+
+###### genes to check ######
+# DefaultAssay(sce) <- "RNA"
+markers <- c("Cd4",  #cd4+ Tcells            
+             "Cd8a","Cd8b1",  #cd8+ Tcells 
+             "Ccr7", "Sell","Cd44", #T naive CD44-CCR7+SELL(CD62L)+ 
+             "Fasl","Fas",#T effecctor             
+             "Il7r")#T memory   CCR7和CD62在Tcm和Tem上不同        
+             
+markers_plot <- data.frame(cluster = c(rep("CD4 Tcell",1),                                  
+                                       rep("CD8 Tcell",2),                                  
+                                       rep("naive Tcell",3),                                  
+                                       rep("effector Tcell",2),                                  
+                                       rep("memory Tcell",1)),                                
+                           gene = markers)
+
+pdf(paste0(outdir,"/","03-",gene,"-Tcell_markers.pdf"),height=10,width=6)
+jjDotPlot(object = sce,          
+          markerGene = markers_plot,          
+          anno = T,          
+          id = 'seurat_clusters',          
+          textSize = 10,          
+          base_size= 10,          
+          plot.margin = c(4,1.5,1.5,1.5))
+dev.off()
+
+
+###### annotation ######
+# celltype <- c(    "0"="CD8+ Tcell", 
+#                   "1"="CD8+ Tcell", 
+#                   "2"="CD4+ Tcell", 
+#                   "3"="other Tcell",
+#                   "4"="CD8+ Tcell",
+#                   "5"="CD4+ Tcell",
+#                   "6"="CD8+ Tcell",
+#                   "7"="CD4+ Tcell",
+#                   "8"="CD4+ Tcell",
+#                   "9"="CD8+ Tcell",
+#                   "10" = "CD8+ Tcell",
+#                   "11" = "CD8+ Tcell",
+#                   "12" = "CD4+ Tcell",
+#                   "13" = "CD8+ Tcell",
+#                   "14" = "other Tcell",
+#                   "15" = "CD8+ Tcell",
+#                   "16" = "CD4+ Tcell",
+#                   "17" = "CD8+ Tcell") ##injected
+celltype <- c(    "0"="CD8+ Tcell", 
+                  "1"="CD4+ Tcell", 
+                  "2"="CD4+ Tcell", 
+                  "3"="CD8+ Tcell",
+                  "4"="other Tcell",
+                  "5"="CD4+ Tcell",
+                  "6"="CD8+ Tcell",
+                  "7"="CD8+ Tcell",
+                  "8"="CD4+ Tcell",
+                  "9"="CD8+ Tcell",
+                  "10" = "CD4+ Tcell",
+                  "11" = "CD8+ Tcell",
+                  "12" = "CD8+ Tcell",
+                  "13" = "other Tcell",
+                  "14" = "other Tcell",
+                  "15" = "CD8+ Tcell",
+                  "16" = "CD4+ Tcell")##uninjected
+sce@meta.data$t_type <- celltype[sce@meta.data$seurat_clusters]
+
+# tcelltype <- c(   "0"="effector Tcell", 
+#                   "1"="naive Tcell", 
+#                   "2"="memory Tcell", 
+#                   "3"="naive Tcell",
+#                   "4"="effector Tcell",
+#                   "5"="effector Tcell",
+#                   "6"="effector Tcell",
+#                   "7"="naive Tcell",
+#                   "8"="memory Tcell",
+#                   "9"="memory Tcell",
+#                   "10" = "naive Tcell",
+#                   "11" = "memory Tcell",
+#                   "12" = "effector Tcell",
+#                   "13" = "effector Tcell",
+#                   "14" = "memory Tcell",
+#                   "15" = "effector Tcell",
+#                   "16" = "naive Tcell",
+#                   "17" = "memory Tcell")##injected
+tcelltype <- c(   "0"="naive Tcell", 
+                  "1"="memory Tcell", 
+                  "2"="effector Tcell", 
+                  "3"="memory Tcell",
+                  "4"="naive Tcell",
+                  "5"="memory Tcell",
+                  "6"="effector Tcell",
+                  "7"="effector Tcell",
+                  "8"="memory Tcell",
+                  "9"="naive Tcell",
+                  "10" = "effector Tcell",
+                  "11" = "effector Tcell",
+                  "12" = "effector Tcell",
+                  "13" = "memory Tcell",
+                  "14" = "memory Tcell",
+                  "15" = "effector Tcell",
+                  "16" = "memory Tcell")##uninjjected
+sce@meta.data$t_function <- tcelltype[sce@meta.data$seurat_clusters]
+save(sce,file = "~/rawdata/L2HGDH_scRNA/uninjected/uninjected_tcell.RData")
+
+###### plotting ######
+pdf(paste0(outdir,"/","03-",gene,"-Tcell_ratio.pdf"),height=8,width=12)
+
+####### *CD4 CD8 比例 #######
+Cellratio <- prop.table(table(celltype=sce$t_type, group=sce$orig.ident), margin = 2)#计算各组样本不同细胞群比例
+Cellratio <- data.frame(Cellratio)
+
+library(reshape2)
+cellper <- dcast(Cellratio,group~celltype, value.var = "Freq")#长数据转为宽数据
+rownames(cellper) <- cellper[,1]
+cellper <- cellper[,-1]
+#添加分组信息
+sample <- unique(sce$orig.ident)
+group <- sub("(_1|_2|_3)$", "", sample)
+samples <- data.frame(sample, group)#创建数据框
+
+rownames(samples)=samples$sample
+cellper$sample <- samples[rownames(cellper),'sample']#R添加列
+cellper$group <- samples[rownames(cellper),'group']#R添加列
+pplist = list()
+sce_groups = unique(sce$t_type)
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(cowplot)
+for(group_ in sce_groups){
+  cellper_  = cellper[,c('sample','group',group_)]
+  colnames(cellper_) = c('sample','group','percent')#对选择数据列命名
+  cellper_$group <- factor(cellper_$group , levels =c("PBS","VG21","S"))
+  cellper_$percent = as.numeric(cellper_$percent)#数值型数据
+  cellper_ <- cellper_ %>% group_by(group) %>% mutate(upper =  quantile(percent, 0.75), 
+                                                      lower = quantile(percent, 0.25),
+                                                      mean = mean(percent),
+                                                      median = median(percent))#上下分位数
+  print(group_)
+  print(cellper_$median)
+  
+  pp1 = ggplot(cellper_,aes(x=group,y=percent)) + #ggplot作图
+    scale_y_continuous(expand =  expansion(mult = c(0, 0.05)),limits = c(0, NA))+
+    geom_jitter(shape = 21,aes(fill=group),width = 0.25) + 
+    stat_summary(fun=mean, geom="point", color="grey60") +
+    theme_cowplot() +
+    theme(axis.text = element_text(size = 10,angle = 45, hjust = 1),axis.title = element_text(size = 10),legend.text = element_text(size = 10),
+          legend.title = element_text(size = 10),plot.title = element_text(size = 10,face = 'plain')) + 
+    labs(title = group_,y=paste0(group_,"/T cells")) +
+    geom_errorbar(aes(ymin = lower, ymax = upper),col = "grey60",width =  1)
+  
+  pplist[[group_]] = pp1
+}
+
+library(cowplot)
+plot_grid(pplist[[1]],
+          pplist[[2]],
+          pplist[[3]],nrow = 1)
+
+
+###### *Te Tm Tn比例 ######
+
+Cellratio <- prop.table(table(celltype=sce$t_function, group=sce$orig.ident), margin = 2)#计算各组样本不同细胞群比例
+Cellratio <- data.frame(Cellratio)
+
+library(reshape2)
+cellper <- dcast(Cellratio,group~celltype, value.var = "Freq")#长数据转为宽数据
+rownames(cellper) <- cellper[,1]
+cellper <- cellper[,-1]
+#添加分组信息
+sample <- unique(sce$orig.ident)
+group <- sub("(_1|_2|_3)$", "", sample)
+samples <- data.frame(sample, group)#创建数据框
+
+rownames(samples)=samples$sample
+cellper$sample <- samples[rownames(cellper),'sample']#R添加列
+cellper$group <- samples[rownames(cellper),'group']#R添加列
+pplist = list()
+sce_groups = unique(sce$t_function)
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(cowplot)
+for(group_ in sce_groups){
+  cellper_  = cellper[,c('sample','group',group_)]
+  colnames(cellper_) = c('sample','group','percent')#对选择数据列命名
+  cellper_$group <- factor(cellper_$group , levels =c("PBS","VG21","S"))
+  cellper_$percent = as.numeric(cellper_$percent)#数值型数据
+  cellper_ <- cellper_ %>% group_by(group) %>% mutate(upper =  quantile(percent, 0.75), 
+                                                      lower = quantile(percent, 0.25),
+                                                      mean = mean(percent),
+                                                      median = median(percent))#上下分位数
+  print(group_)
+  print(cellper_$median)
+  
+  pp1 = ggplot(cellper_,aes(x=group,y=percent)) + #ggplot作图
+    scale_y_continuous(expand =  expansion(mult = c(0, 0.05)),limits = c(0, NA))+
+    geom_jitter(shape = 21,aes(fill=group),width = 0.25) + 
+    stat_summary(fun=mean, geom="point", color="grey60") +
+    theme_cowplot() +
+    theme(axis.text = element_text(size = 10,angle = 45, hjust = 1),axis.title = element_text(size = 10),legend.text = element_text(size = 10),
+          legend.title = element_text(size = 10),plot.title = element_text(size = 10,face = 'plain')) + 
+    labs(title = group_,y=paste0(group_,"/T cells")) +
+    geom_errorbar(aes(ymin = lower, ymax = upper),col = "grey60",width =  1)
+  
+  pplist[[group_]] = pp1
+}
+
+library(cowplot)
+plot_grid(pplist[[1]],
+          pplist[[2]],
+          pplist[[3]],nrow = 1)
+
+###### *Te Tm Tn占 CD4/CD8比例 ######
+
+Cellratio <- prop.table(table(celltype=sce$t_function, group=sce$orig.ident,tcell=sce$t_type), margin = c(2, 3))#计算各组样本不同细胞群比例
+Cellratio <- data.frame(Cellratio)
+
+library(reshape2)
+cellper <- dcast(Cellratio,group+tcell~celltype, value.var = "Freq")#长数据转为宽数据
+sce_tcell <- unique(sce$t_type) 
+pplist = list()
+
+for(tcell_ in sce_tcell){
+cellper_1 <- cellper[cellper$tcell == tcell_,]
+rownames(cellper_1) <- cellper_1[,1]
+cellper_1 <- cellper_1[,-1]
+#添加分组信息
+sample <- unique(sce$orig.ident)
+group <- sub("(_1|_2|_3)$", "", sample)
+samples <- data.frame(sample, group)#创建数据框
+
+rownames(samples)=samples$sample
+cellper_1$sample <- samples[rownames(cellper_1),'sample']#R添加列
+cellper_1$group <- samples[rownames(cellper_1),'group']#R添加列
+
+sce_groups = unique(sce$t_function)
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(cowplot)
+library(grid)
+for(group_ in sce_groups){
+  cellper_  = cellper_1[,c('sample','group',group_)]
+  colnames(cellper_) = c('sample','group','percent')#对选择数据列命名
+  cellper_$group <- factor(cellper_$group , levels =c("PBS","VG21","S"))
+  cellper_$percent = as.numeric(cellper_$percent)#数值型数据
+  cellper_ <- cellper_ %>% group_by(group) %>% mutate(upper =  quantile(percent, 0.75), 
+                                                      lower = quantile(percent, 0.25),
+                                                      mean = mean(percent),
+                                                      median = median(percent))#上下分位数
+  print(group_)
+  print(cellper_$median)
+  
+  
+  pp1 = ggplot(cellper_,aes(x=group,y=percent)) + #ggplot作图
+    scale_y_continuous(expand =  expansion(mult = c(0, 0.05)),limits = c(0, NA))+
+    geom_jitter(shape = 21,aes(fill=group),width = 0.25) + 
+    stat_summary(fun=mean, geom="point", color="grey60") +
+    theme_cowplot() +
+    theme(axis.text = element_text(size = 10,angle = 45, hjust = 1),axis.title = element_text(size = 10),legend.text = element_text(size = 10),
+          legend.title = element_text(size = 10),plot.title = element_text(size = 10,face = 'plain')) + 
+    labs(title = group_,y=paste0(group_,"/",tcell_)) +
+    geom_errorbar(aes(ymin = lower, ymax = upper),col = "grey60",width =  1)
+  
+  pplist[[paste0(tcell_,group_)]] = pp1
+}
+
+}
+
+library(cowplot)
+plot_grid(pplist[[1]],
+          pplist[[2]],
+          pplist[[3]],
+          pplist[[4]],
+          pplist[[5]],
+          pplist[[6]])
+
+dev.off()
+
+
+##### 巨噬细胞细胞亚群聚类 #####
+library(Seurat)
+library(SeuratData)
+library(patchwork)
+library(dplyr)
+library(ggplot2)
+library(harmony)
+library(sctransform)
+library(future)
+library(glmGamPoi)
+plan("multisession", workers = 16)
+options(future.globals.maxSize= 1024^4)
+plan()
+rm(list=ls())
+gc()
+
+setwd('~/rawdata')
+gene = "L2HGDH"
+outdir = paste0("~/OV/",gene)
+##virus_3D
+load("~/rawdata/L2HGDH_scRNA/uninjected/uninjected_anno.RData")
+
+###提取亚群
+sce <- subset(sce, celltype=="Macrophage")
+###降维
+DefaultAssay(sce) <- "RNA"
+sce <- NormalizeData(sce, normalization.method = "LogNormalize", scale.factor = 1e4) 
+sce <- FindVariableFeatures(sce, selection.method = 'vst', nfeatures = 2000)
+sce <- ScaleData(sce, vars.to.regress = "percent.mt")
+sce <- RunPCA(sce, features = VariableFeatures(object = sce)) 
+
+sce <- FindNeighbors(sce, dims = 1:10)
+sce <- FindClusters(sce, resolution = 0.5)
+sce <- RunUMAP(sce, dims = 1:10)
+pdf(paste0(outdir,"/","04-",gene,"-M_cluster.pdf"),height=10,width=6)
+DimPlot(sce, reduction = 'umap', group.by = 'seurat_clusters',label = TRUE, pt.size = 0.5)
+dev.off()
+
+save(sce,file = "~/rawdata/L2HGDH_scRNA/uninjected/uninjected_macrophage.RData")
+
+
+##### 巨噬细胞亚群注释 #####
+library(Seurat) 
+library(ggplot2)
+library(dplyr)
+library(scRNAtoolVis)
+rm(list=ls())
+gc()
+
+setwd('~/rawdata')
+gene = "L2HGDH"
+outdir = paste0("~/OV/",gene)
+
+load("~/rawdata/L2HGDH_scRNA/injected/injected_macrophage.RData")
+###### genes to check ######
+# DefaultAssay(sce) <- "RNA"
+markers <- c("Nos2","Cd86","Cd80","Il12b",  #M1            
+             "Arg1","Mrc1","Cd163","Il10")#M2      
+
+markers_plot <- data.frame(cluster = c(rep("M1 macrophage",4),                                  
+                                       rep("M2 macrophage",4)),                                
+                           gene = markers)
+
+pdf(paste0(outdir,"/","04-",gene,"-M_markers.pdf"),height=10,width=6)
+jjDotPlot(object = sce,          
+          markerGene = markers_plot,          
+          anno = T,          
+          id = 'seurat_clusters',          
+          textSize = 10,          
+          base_size= 10,          
+          plot.margin = c(5,1.5,1.5,1.5))
+dev.off()
+
+
+###### annotation ######
+celltype <- c(    "0"="CD8+ Tcell",
+                  "1"="CD8+ Tcell",
+                  "2"="CD4+ Tcell",
+                  "3"="other Tcell",
+                  "4"="CD8+ Tcell",
+                  "5"="CD4+ Tcell",
+                  "6"="CD8+ Tcell",
+                  "7"="CD4+ Tcell",
+                  "8"="CD4+ Tcell",
+                  "9"="CD8+ Tcell",
+                  "10" = "CD8+ Tcell",
+                  "11" = "CD8+ Tcell",
+                  "12" = "CD4+ Tcell",
+                  "13" = "CD8+ Tcell",
+                  "14" = "other Tcell",
+                  "15" = "CD8+ Tcell",
+                  "16" = "CD4+ Tcell",
+                  "17" = "CD8+ Tcell") ##injected
+# celltype <- c(    "0"="CD8+ Tcell", 
+#                   "1"="CD8+ Tcell", 
+#                   "2"="CD4+ Tcell", 
+#                   "3"="other Tcell",
+#                   "4"="CD8+ Tcell",
+#                   "5"="CD4+ Tcell",
+#                   "6"="CD8+ Tcell",
+#                   "7"="CD4+ Tcell",
+#                   "8"="CD4+ Tcell",
+#                   "9"="CD8+ Tcell",
+#                   "10" = "CD8+ Tcell",
+#                   "11" = "CD8+ Tcell",
+#                   "12" = "CD4+ Tcell",
+#                   "13" = "CD8+ Tcell",
+#                   "14" = "other Tcell",
+#                   "15" = "CD8+ Tcell",
+#                   "16" = "CD4+ Tcell")##uninjected
+sce@meta.data$m_type <- celltype[sce@meta.data$seurat_clusters]
+
+save(sce,file = "~/rawdata/L2HGDH_scRNA/injected/injected_macrophage.RData")
+
+###### plotting--M1&M2 ######
+pdf(paste0(outdir,"/","03-",gene,"-Tcell_ratio.pdf"),height=8,width=12)
+
+
+Cellratio <- prop.table(table(celltype=sce$m_type, group=sce$orig.ident), margin = 2)#计算各组样本不同细胞群比例
+Cellratio <- data.frame(Cellratio)
+
+library(reshape2)
+cellper <- dcast(Cellratio,group~celltype, value.var = "Freq")#长数据转为宽数据
+rownames(cellper) <- cellper[,1]
+cellper <- cellper[,-1]
+#添加分组信息
+sample <- unique(sce$orig.ident)
+group <- sub("(_1|_2|_3)$", "", sample)
+samples <- data.frame(sample, group)#创建数据框
+
+rownames(samples)=samples$sample
+cellper$sample <- samples[rownames(cellper),'sample']#R添加列
+cellper$group <- samples[rownames(cellper),'group']#R添加列
+pplist = list()
+sce_groups = unique(sce$t_type)
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(cowplot)
+for(group_ in sce_groups){
+  cellper_  = cellper[,c('sample','group',group_)]
+  colnames(cellper_) = c('sample','group','percent')#对选择数据列命名
+  cellper_$group <- factor(cellper_$group , levels =c("PBS","VG21","S"))
+  cellper_$percent = as.numeric(cellper_$percent)#数值型数据
+  cellper_ <- cellper_ %>% group_by(group) %>% mutate(upper =  quantile(percent, 0.75), 
+                                                      lower = quantile(percent, 0.25),
+                                                      mean = mean(percent),
+                                                      median = median(percent))#上下分位数
+  print(group_)
+  print(cellper_$median)
+  
+  pp1 = ggplot(cellper_,aes(x=group,y=percent)) + #ggplot作图
+    scale_y_continuous(expand =  expansion(mult = c(0, 0.05)),limits = c(0, NA))+
+    geom_jitter(shape = 21,aes(fill=group),width = 0.25) + 
+    stat_summary(fun=mean, geom="point", color="grey60") +
+    theme_cowplot() +
+    theme(axis.text = element_text(size = 10,angle = 45, hjust = 1),axis.title = element_text(size = 10),legend.text = element_text(size = 10),
+          legend.title = element_text(size = 10),plot.title = element_text(size = 10,face = 'plain')) + 
+    labs(title = group_,y=paste0(group_,"/T cells")) +
+    geom_errorbar(aes(ymin = lower, ymax = upper),col = "grey60",width =  1)
+  
+  pplist[[group_]] = pp1
+}
+
+library(cowplot)
+plot_grid(pplist[[1]],
+          pplist[[2]])
+
 
 dev.off()
