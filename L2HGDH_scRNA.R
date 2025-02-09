@@ -314,7 +314,7 @@ setwd('~/rawdata')
 gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 ##virus_3D
-load("~/rawdata/L2HGDH_scRNA/uninjected/uninjected_anno.RData")
+load("~/rawdata/L2HGDH_scRNA/injected/injected_anno.RData")
 
 ###提取亚群
 sce <- subset(sce, celltype=="Tcell")
@@ -332,7 +332,7 @@ pdf(paste0(outdir,"/","03-",gene,"-Tcell_cluster.pdf"),height=10,width=6)
 DimPlot(sce, reduction = 'umap', group.by = 'seurat_clusters',label = TRUE, pt.size = 0.5)
 dev.off()
 
-save(sce,file = "~/rawdata/L2HGDH_scRNA/uninjected/uninjected_tcell.RData")
+save(sce,file = "~/rawdata/L2HGDH_scRNA/injected/injected_tcell.RData")
 
 
 ##### T细胞亚群注释 #####
@@ -376,9 +376,9 @@ dev.off()
 
 
 ###### annotation ######
-# celltype <- c(    "0"="CD8+ Tcell", 
-#                   "1"="CD8+ Tcell", 
-#                   "2"="CD4+ Tcell", 
+# celltype <- c(    "0"="CD8+ Tcell",
+#                   "1"="CD8+ Tcell",
+#                   "2"="CD4+ Tcell",
 #                   "3"="other Tcell",
 #                   "4"="CD8+ Tcell",
 #                   "5"="CD4+ Tcell",
@@ -394,9 +394,9 @@ dev.off()
 #                   "15" = "CD8+ Tcell",
 #                   "16" = "CD4+ Tcell",
 #                   "17" = "CD8+ Tcell") ##injected
-celltype <- c(    "0"="CD8+ Tcell", 
-                  "1"="CD4+ Tcell", 
-                  "2"="CD4+ Tcell", 
+celltype <- c(    "0"="CD8+ Tcell",
+                  "1"="CD4+ Tcell",
+                  "2"="CD4+ Tcell",
                   "3"="CD8+ Tcell",
                   "4"="other Tcell",
                   "5"="CD4+ Tcell",
@@ -413,9 +413,9 @@ celltype <- c(    "0"="CD8+ Tcell",
                   "16" = "CD4+ Tcell")##uninjected
 sce@meta.data$t_type <- celltype[sce@meta.data$seurat_clusters]
 
-# tcelltype <- c(   "0"="effector Tcell", 
-#                   "1"="naive Tcell", 
-#                   "2"="memory Tcell", 
+# tcelltype <- c(   "0"="effector Tcell",
+#                   "1"="naive Tcell",
+#                   "2"="memory Tcell",
 #                   "3"="naive Tcell",
 #                   "4"="effector Tcell",
 #                   "5"="effector Tcell",
@@ -431,9 +431,9 @@ sce@meta.data$t_type <- celltype[sce@meta.data$seurat_clusters]
 #                   "15" = "effector Tcell",
 #                   "16" = "naive Tcell",
 #                   "17" = "memory Tcell")##injected
-tcelltype <- c(   "0"="naive Tcell", 
-                  "1"="memory Tcell", 
-                  "2"="effector Tcell", 
+tcelltype <- c(   "0"="naive Tcell",
+                  "1"="memory Tcell",
+                  "2"="effector Tcell",
                   "3"="memory Tcell",
                   "4"="naive Tcell",
                   "5"="memory Tcell",
@@ -797,4 +797,211 @@ plot_grid(pplist[[1]],
           pplist[[2]])
 
 
+dev.off()
+
+
+##### T细胞富集分析 #####
+library(Seurat)
+library(tidyverse)
+library(patchwork)
+library(monocle)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+rm(list=ls())
+gc()
+
+setwd('~/rawdata')
+gene = "L2HGDH"
+outdir = paste0("~/OV/",gene)
+
+load("~/rawdata/L2HGDH_scRNA/injected/injected_tcell.RData")
+
+sce <- JoinLayers(sce)
+dge <- FindMarkers(sce,ident.1 = "VG21",ident.2 = "S",group.by = "group")##1是ctrl，2是treat
+sig_dge <- subset(dge, p_val_adj<0.01&abs(avg_log2FC)>1)
+
+#GO分析(注意是小鼠的)，count表示改变的基因数
+ego_ALL <- enrichGO(gene          = row.names(sig_dge),
+                    #universe     = row.names(dge.celltype),
+                    OrgDb         = 'org.Mm.eg.db',
+                    keyType       = 'SYMBOL',
+                    ont           = "ALL",
+                    pAdjustMethod = "BH",
+                    pvalueCutoff  = 0.01,
+                    qvalueCutoff  = 0.05)
+ego_all <- data.frame(ego_ALL)
+ego_CC <- enrichGO(gene          = row.names(sig_dge),
+                   #universe     = row.names(dge.celltype),
+                   OrgDb         = 'org.Mm.eg.db',
+                   keyType       = 'SYMBOL',
+                   ont           = "CC",
+                   pAdjustMethod = "BH",
+                   pvalueCutoff  = 0.01,
+                   qvalueCutoff  = 0.05)
+ego_MF <- enrichGO(gene          = row.names(sig_dge),
+                   #universe     = row.names(dge.celltype),
+                   OrgDb         = 'org.Mm.eg.db',
+                   keyType       = 'SYMBOL',
+                   ont           = "MF",
+                   pAdjustMethod = "BH",
+                   pvalueCutoff  = 0.01,
+                   qvalueCutoff  = 0.05)
+ego_BP <- enrichGO(gene          = row.names(sig_dge),
+                   #universe     = row.names(dge.celltype),
+                   OrgDb         = 'org.Mm.eg.db',
+                   keyType       = 'SYMBOL',
+                   ont           = "BP",
+                   pAdjustMethod = "BH",
+                   pvalueCutoff  = 0.01,
+                   qvalueCutoff  = 0.05) 
+#截取每个description的前70个字符，方便后面作图排版
+ego_CC@result$Description <- substring(ego_CC@result$Description,1,70)
+ego_MF@result$Description <- substring(ego_MF@result$Description,1,70)
+ego_BP@result$Description <- substring(ego_BP@result$Description,1,70)
+p_BP <- barplot(ego_BP,showCategory = 10) + ggtitle("barplot for Biological process")
+p_CC <- barplot(ego_CC,showCategory = 10) + ggtitle("barplot for Cellular component")
+p_MF <- barplot(ego_MF,showCategory = 10) + ggtitle("barplot for Molecular function")
+plotc1 <- p_BP/p_CC/p_MF
+#KEGG GeneRatio表示差异基因所占比例
+genelist <- bitr(row.names(sig_dge), fromType="SYMBOL",
+                 toType="ENTREZID", OrgDb='org.Mm.eg.db')#Hs是人类
+# kegg分析的基因名必须要是ENTREZID
+genelist <- pull(genelist,ENTREZID)               
+ekegg <- enrichKEGG(gene = genelist, organism = 'mmu',qvalueCutoff = 0.2,pvalueCutoff = 0.2) #hsa是人类
+p1 <- barplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str_sub(x,1,nchar(x)-28))
+p2 <- dotplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str_sub(x,1,nchar(x)-28))
+plotc2 = p1/p2
+
+pdf(paste0(outdir,"/","05-",gene,"-Tcell_GO&KEGG.pdf"),height=16,width=12)
+plotc1
+plotc2
+dev.off()
+
+
+##### 免疫检查点表达量 #####
+library(Seurat)
+library(ggpubr) # 继承ggplot语法
+library(patchwork) # 拼图包
+library(ggsci) #配色包
+library(wesanderson)
+library(RColorBrewer)
+library(ggplot2)
+library(cowplot)
+library(data.table)
+rm(list=ls())
+gc()
+
+setwd('~/rawdata')
+gene = "L2HGDH"
+outdir = paste0("~/OV/",gene)
+
+load("~/rawdata/L2HGDH_scRNA/injected/injected_tcell.RData")
+checkpoint <- fread("~/rawdata/Immune/checkpoint.csv")
+
+
+##鼠源-人源转换
+#使用homologene函进行转换
+#@genelist是要转换的基因列表
+#@inTax是输入的基因列表所属的物种号，10090是小鼠
+#@outTax是要转换成的物种号，9606是人
+#install.packages('homologene')
+library(homologene)
+#homologene(genelist, inTax = 10090, outTax = 9606)
+checkpoint <- human2mouse(checkpoint$`Check-point`)
+checkpoint$`Check-point` <- checkpoint[,2]
+
+
+##挑出checkpoint
+sce <- JoinLayers(sce)
+data_count <- as.data.frame(GetAssayData(object = sce, slot = "data"))
+data_count <- as.data.frame(t(data_count))
+data_count <- data_count[,colnames(data_count) %in% checkpoint$`Check-point`]
+
+gene_meta <- as.data.frame(sce$group)
+colnames(gene_meta) <- "gene_meta"
+
+
+
+##批量箱线图
+col <- wes_palette("Darjeeling1" , n = 3)
+
+Exp_plot <- merge(gene_meta,data_count,by="row.names")
+rownames(Exp_plot) <- Exp_plot$Row.names
+Exp_plot <- Exp_plot[,-1]
+
+library(dplyr)
+library(rstatix)
+library(reshape2)
+result=melt(Exp_plot) %>%
+  group_by(variable) %>%
+  t_test(value ~ gene_meta) %>%
+  adjust_pvalue(method = "fdr")#计算p值
+result <- result[order(result$p),]
+Exp_plot <- Exp_plot[, c(1,na.omit(match(unique(result$variable),colnames(Exp_plot))))]
+
+gene_list <- colnames(Exp_plot[,-1])
+sample <- "gene_meta"
+
+
+plist2<-list()
+for (i in 1:length(gene_list)){
+  bar_tmp<-Exp_plot[,c(gene_list[i],sample)]
+  bar_tmp <- na.omit(bar_tmp)
+  colnames(bar_tmp)<-c("Expression","sam")
+  my_comparisons1 <- list(c("PBS", "VG21"),c("PBS","S"),c("VG21","S")) 
+  bar_tmp$sam <- factor(bar_tmp$sam, levels = c("PBS", "VG21", "S"))
+  pb1<-ggviolin(bar_tmp,
+                 x="sam",
+                 y="Expression",
+                 color="sam",
+                 fill=NULL,
+                 add = "jitter",
+                 bxp.errorbar.width = 0.6,
+                 width = 0.6,
+                 size=0.01,
+                 font.label = list(size=30), 
+                 palette = col)+theme(panel.background =element_blank())+ylab("Expression") 
+  pb1<-pb1+theme(axis.line=element_line(colour="black"))+theme(axis.title.x = element_blank())
+  pb1<-pb1+theme(axis.text.x = element_text(size = 15,angle = 45,vjust = 1,hjust = 1))
+  pb1<-pb1+theme(axis.text.y = element_text(size = 15))+ggtitle(gene_list[i])+theme(plot.title = element_text(hjust = 0.5,size=15,face="bold"))
+  pb1<-pb1+theme(legend.position = "NA")#
+  pb1<-pb1+stat_compare_means(method="t.test",
+                              comparisons =c(my_comparisons1),
+                              label="p.signif")
+  pb1 <- pb1 + geom_boxplot(width = 0.1, position = position_dodge(0.9), outlier.shape = NA)
+  plist2[[i]]<-pb1 
+}
+
+
+n_pdf=ceiling(length(plist2)/8)   ##判断一页4张图，需要多少页pdf
+pdf(paste0(outdir,"/","05-",gene,"-Tcell_checkpoint_boxplot.pdf"),height=12,width=16)
+plist1 <- plist2
+for (i in 1:n_pdf){ 
+  if (length(plist1) > 8){
+    new_list=plist1[1:8]
+    plist1=plist1[-c(1:8)]
+    print(plot_grid(plotlist=new_list,ncol=4,nrow=2,hjust=1.5))
+  }   ##当list中存在的图数量>4时，把前4个给到画图的newlist中并在一页pdf画出来；最后在原始list删除这4个图
+  else {
+    new_list=plist1
+    print(plot_grid(plotlist=new_list,ncol=4,nrow=2,hjust=1.5))
+  }##当list中存在的图数量≤4时，整个list给到现在的newlist中并在一页pdf画出来
+}
+dev.off()
+
+
+##热图
+library(ggplot2)
+library(ggsignif)
+library(ggpubr)
+library(pheatmap)
+library(gtable)
+library(grid)
+
+feature <- intersect(rownames(sce[["RNA"]]$scale.data),checkpoint$`Check-point`)
+Idents(sce) <- sce$group
+
+
+pdf(paste0(outdir,"/","05-",gene,"-Tcell_checkpoint_heatmap.pdf"),height=30,width=20)
+DoHeatmap(sce,features = feature,label = F,slot = "scale.data")
 dev.off()
