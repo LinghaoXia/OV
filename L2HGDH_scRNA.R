@@ -816,6 +816,7 @@ outdir = paste0("~/OV/",gene)
 
 load("~/rawdata/L2HGDH_scRNA/injected/injected_tcell.RData")
 
+sce <- subset(sce,t_type=="CD4+ Tcell")
 sce <- JoinLayers(sce)
 dge <- FindMarkers(sce,ident.1 = "VG21",ident.2 = "S",group.by = "group")##1是ctrl，2是treat
 sig_dge <- subset(dge, p_val_adj<0.01&abs(avg_log2FC)>1)
@@ -872,7 +873,8 @@ p1 <- barplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str
 p2 <- dotplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str_sub(x,1,nchar(x)-28))
 plotc2 = p1/p2
 
-pdf(paste0(outdir,"/","05-",gene,"-Tcell_GO&KEGG.pdf"),height=16,width=12)
+# pdf(paste0(outdir,"/","05-",gene,"-Tcell_GO&KEGG.pdf"),height=16,width=12)
+pdf(paste0(outdir,"/","06-",gene,"-CD4+Tcell_GO&KEGG.pdf"),height=16,width=12)
 plotc1
 plotc2
 dev.off()
@@ -974,7 +976,8 @@ for (i in 1:length(gene_list)){
 
 
 n_pdf=ceiling(length(plist2)/8)   ##判断一页4张图，需要多少页pdf
-pdf(paste0(outdir,"/","05-",gene,"-Tcell_checkpoint_boxplot.pdf"),height=12,width=16)
+# pdf(paste0(outdir,"/","05-",gene,"-Tcell_checkpoint_boxplot.pdf"),height=12,width=16)
+pdf(paste0(outdir,"/","06-",gene,"-CD4+Tcell_checkpoint_boxplot.pdf"),height=12,width=16)
 plist1 <- plist2
 for (i in 1:n_pdf){ 
   if (length(plist1) > 8){
@@ -1002,6 +1005,7 @@ feature <- intersect(rownames(sce[["RNA"]]$scale.data),checkpoint$`Check-point`)
 Idents(sce) <- sce$group
 
 
-pdf(paste0(outdir,"/","05-",gene,"-Tcell_checkpoint_heatmap.pdf"),height=30,width=20)
+# pdf(paste0(outdir,"/","05-",gene,"-Tcell_checkpoint_heatmap.pdf"),height=30,width=20)
+pdf(paste0(outdir,"/","06-",gene,"-CD4+Tcell_checkpoint_heatmap.pdf"),height=30,width=20)
 DoHeatmap(sce,features = feature,label = F,slot = "scale.data")
 dev.off()
