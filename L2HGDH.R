@@ -92,7 +92,7 @@ gene = "L2HGDH"
 outdir = paste0("~/OV/",gene)
 
 
-data_tpm <- as.matrix(read.csv("~/rawdata/L2HGDH_rnaseq/RNA-seq-ifny.csv", row.names = 1))
+data_tpm <- as.matrix(read.csv("~/rawdata/L2HGDH_rnaseq/RNA-seq-ctrl.csv", row.names = 1))
 # data_tpm <- as.matrix(read.csv("~/rawdata/L2HGDH_rnaseq/RNA-seq-ifny.csv", row.names = 1))
 sample_info <- data.frame(
   group = factor(c(rep("Control", 3), rep("Kncokdown", 6)))
@@ -245,7 +245,7 @@ ego_ALL <- enrichGO(gene          = row.names(sig_dge),
                     pAdjustMethod = "BH",
                     pvalueCutoff  = 0.01,
                     qvalueCutoff  = 0.05)
-write.csv(ego_ALL,file = paste0(outdir,"/IFN-y-",gene,"-GO.csv"), sep="\t", quote=F, row.names = F)
+write.csv(ego_ALL,file = paste0(outdir,"/IFN-y-",gene,"-GO.csv"), quote=F, row.names = F)
 ego_all <- data.frame(ego_ALL)
 plotc3 <- barplot(ego_ALL, x = "GeneRatio", color = "p.adjust", #默认参数（x和color可以根据eG里面的内容更改）
         showCategory =10, #只显示前10
@@ -289,7 +289,7 @@ genelist <- bitr(row.names(sig_dge), fromType="SYMBOL",
 # kegg分析的基因名必须要是ENTREZID
 genelist <- pull(genelist,ENTREZID)               
 ekegg <- enrichKEGG(gene = genelist, organism = 'mmu',qvalueCutoff = 0.2,pvalueCutoff = 0.2) #hsa是人类
-write.csv(ekegg,file = paste0(outdir,"/IFN-y-",gene,"-KEGG.csv"), sep="\t", quote=F, row.names = F)
+write.csv(ekegg,file = paste0(outdir,"/IFN-y-",gene,"-KEGG.csv"),  quote=F, row.names = F)
 p1 <- barplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str_sub(x,1,nchar(x)-28))
 p2 <- dotplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str_sub(x,1,nchar(x)-28))
 plotc2 = p1/p2
