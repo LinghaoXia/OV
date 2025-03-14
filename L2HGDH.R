@@ -92,7 +92,7 @@ gene = "L2HGDH"
 outdir = paste0("~/OV/",gene)
 
 
-data_tpm <- as.matrix(read.csv("~/rawdata/L2HGDH_rnaseq/RNA-seq-ctrl.csv", row.names = 1))
+data_tpm <- as.matrix(read.csv("~/rawdata/L2HGDH_rnaseq/RNA-seq-ifny.csv", row.names = 1))
 # data_tpm <- as.matrix(read.csv("~/rawdata/L2HGDH_rnaseq/RNA-seq-ifny.csv", row.names = 1))
 sample_info <- data.frame(
   group = factor(c(rep("Control", 3), rep("Kncokdown", 6)))
@@ -225,6 +225,7 @@ library(tidyverse)
 library(patchwork)
 library(clusterProfiler)
 library(org.Hs.eg.db)
+library(org.Mm.eg.db)
 rm(list=ls())
 gc()
 
@@ -289,8 +290,18 @@ genelist <- bitr(row.names(sig_dge), fromType="SYMBOL",
 # kegg分析的基因名必须要是ENTREZID
 genelist <- pull(genelist,ENTREZID)               
 ekegg <- enrichKEGG(gene = genelist, organism = 'mmu',qvalueCutoff = 0.2,pvalueCutoff = 0.2) #hsa是人类
-write.csv(ekegg,file = paste0(outdir,"/IFN-y-",gene,"-KEGG.csv"),  quote=F, row.names = F)
-p1 <- barplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str_sub(x,1,nchar(x)-28))
+ekegg_df <- as.data.frame(ekegg)
+ekegg_df$SYMBOL <- lapply(strsplit(ekegg_df$geneID, "/"), function(entrez_ids) {
+  mapIds(org.Mm.eg.db, 
+         keys = entrez_ids, 
+         keytype = "ENTREZID", 
+         column = "SYMBOL",
+         multiVals = "first")  # 如果有多个匹配，取第一个
+})
+ekegg_df$SYMBOL <- sapply(ekegg_df$SYMBOL, paste, collapse = "/")
+write.csv(ekegg_df,file = paste0(outdir,"/IFN-y-",gene,"-KEGG.csv"),  quote=F, row.names = F)
+
+p1 <- barplot(ekegg_df, showCategory=10)+ scale_y_discrete(labels = function(x) str_sub(x,1,nchar(x)-28))
 p2 <- dotplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str_sub(x,1,nchar(x)-28))
 plotc2 = p1/p2
 
