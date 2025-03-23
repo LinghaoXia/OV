@@ -683,7 +683,7 @@ dev.off()
 
 
 
-##### 细胞互作--建立对照&实验对象 #####
+##### 细胞互作--建立对照对象&实验组对象 #####
 library(Seurat)
 library(tidyverse)
 library(patchwork)
@@ -784,7 +784,7 @@ gg1 <- compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = 
 gg2 <- compareInteractions(cellchat, show.legend = F, group = c(1,2), measure = "weight")
 gg1 + gg2
 
-#数量与强度差异网络图
+#数量与强度差异网络图（保证双方细胞注释种类一样）
 par(mfrow = c(1,2),xpd = TRUE)
 # netVisual_diffInteraction(cellchat, weight.scale = T)
 netVisual_diffInteraction(cellchat, weight.scale = T, measure = "weight")
