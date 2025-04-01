@@ -62,7 +62,7 @@ outdir = paste0("~/OV/",gene)
 load("~/rawdata/scRNA_virus/virus_3D/virus_3D_tcell.RData")
 
 ###### genes to check ######
-markers <- c("CD4",  #cd4+ Tcells            
+markers <- c("CD4", #cd4+ Tcells            
              "CD8A","CD8B",  #cd8+ Tcells 
              "CCR7", "SELL", #T naive CD44-CCR7+SELL(CD62L)+ 
              "FASLG","FAS",#T effecctor             
@@ -88,42 +88,30 @@ dev.off()
 
 
 ###### annotation ######
-celltype <- c(    "0"="CD8+ Tcell",
-                  "1"="CD4+ Tcell",
-                  "2"="CD4+ Tcell",
+celltype <- c(    "0"="CD4+ Tcell",
+                  "1"="other Tcell",
+                  "2"="other Tcell",
                   "3"="CD8+ Tcell",
-                  "4"="other Tcell",
-                  "5"="CD4+ Tcell",
+                  "4"="CD8+ Tcell",
+                  "5"="other Tcell",
                   "6"="CD8+ Tcell",
                   "7"="CD8+ Tcell",
-                  "8"="CD4+ Tcell",
-                  "9"="CD8+ Tcell",
-                  "10" = "CD4+ Tcell",
-                  "11" = "CD8+ Tcell",
-                  "12" = "CD8+ Tcell",
-                  "13" = "other Tcell",
-                  "14" = "other Tcell",
-                  "15" = "CD8+ Tcell",
-                  "16" = "CD4+ Tcell")
+                  "8"="CD8+ Tcell",
+                  "9"="other Tcell",
+                  "10" = "CD4+ Tcell")
 sce@meta.data$t_type <- celltype[sce@meta.data$seurat_clusters]
 
 tcelltype <- c(   "0"="naive Tcell",
-                  "1"="memory Tcell",
-                  "2"="effector Tcell",
-                  "3"="memory Tcell",
-                  "4"="naive Tcell",
+                  "1"="naive Tcell",
+                  "2"="naive Tcell",
+                  "3"="effector Tcell",
+                  "4"="effector Tcell",
                   "5"="memory Tcell",
                   "6"="effector Tcell",
-                  "7"="effector Tcell",
-                  "8"="memory Tcell",
-                  "9"="naive Tcell",
-                  "10" = "effector Tcell",
-                  "11" = "effector Tcell",
-                  "12" = "effector Tcell",
-                  "13" = "memory Tcell",
-                  "14" = "memory Tcell",
-                  "15" = "effector Tcell",
-                  "16" = "memory Tcell")
+                  "7"="memory Tcell",
+                  "8"="naive Tcell",
+                  "9"="memory Tcell",
+                  "10" = "memory Tcell")
 sce@meta.data$t_function <- tcelltype[sce@meta.data$seurat_clusters]
 save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_tcell.RData")
 
@@ -155,7 +143,7 @@ library(cowplot)
 for(group_ in sce_groups){
   cellper_  = cellper[,c('sample','group',group_)]
   colnames(cellper_) = c('sample','group','percent')#对选择数据列命名
-  cellper_$group <- factor(cellper_$group , levels =c("PBS","VG21","S"))
+  cellper_$group <- factor(cellper_$group , levels =c("Vehicle_3D","VG161_3D"))
   cellper_$percent = as.numeric(cellper_$percent)#数值型数据
   cellper_ <- cellper_ %>% group_by(group) %>% mutate(upper =  quantile(percent, 0.75), 
                                                       lower = quantile(percent, 0.25),

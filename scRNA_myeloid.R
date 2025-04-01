@@ -521,3 +521,109 @@ getGSEAplot(gsea.list=mt@data$gsea.list, geneSetID = tf,
 
 
 dev.off()
+
+#### 基因表达量 ####
+library(tidyverse)
+library(patchwork)
+library(viridis)
+library(Seurat)
+library(scCustomize)
+library(gghalves)
+library(ggpubr)
+library(paletteer)
+rm(list=ls())
+gc()
+
+setwd('~/rawdata')
+gene = "scRNA_virus"
+outdir = paste0("~/OV/",gene)
+
+load("~/rawdata/scRNA_virus/virus_3D/virus_3D_mye.RData") 
+
+##合并
+sce.mye <- sce   # 细分后的亚群
+load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")  # 原数据集
+Idents(sce.mye) <- "mye_type" # 设置亚群标识
+Idents(sce) <- "celltype"
+Idents(sce, cells = colnames(sce.mye)) <- Idents(sce.mye)
+sce$celltype_new <- Idents(sce)
+rm(sce.mye)
+
+
+##小提琴图--感染前后
+gene_list <- c("MDK","SDC1","SDC2","SDC4","LRP1","NCL","ITGA6","ITGB1")
+exprs <- data.frame(FetchData(object = sce, vars = c("celltype_new",gene_list,"group")))
+exprs$Proj <- "Seurat"
+exprs$Cell <- rownames(exprs)
+exprs.melt <- reshape2::melt(exprs,                              
+                             id.vars = c("Cell","celltype_new","group"),                              
+                             measure.vars = gene_list,                             
+                             variable.name = "gene",                              
+                             value.name = "Expr")
+
+p1 <- ggplot()+  
+  geom_half_violin(data = exprs.melt[exprs.melt$group == 'Vehicle',],                   
+                   aes(x = celltype_new, y = Expr, fill = group),
+                   color = 'black',                   
+                   scale = 'width') +   
+  facet_grid(rows = vars(gene), scales = 'free_y') +   
+  geom_half_violin(data = exprs.melt[exprs.melt$group == 'VG161',],                   
+                   aes(x = celltype_new, y = Expr, fill = group),                   
+                   color = 'black',                   
+                   scale = 'width',                   
+                   side = 'r') +   
+  facet_grid(rows = vars(gene), scales = 'free_y')+
+  theme_bw() +  
+  theme(panel.grid = element_blank()) +  
+  scale_fill_manual(values = c("#E39A35","#68A180")) +  
+  labs(x = "", y = 'Expression Level') #y轴标题本文内容修改
+
+##小提琴图--旁观者和感染
+group <- unique(sce$group)
+sce2 <- subset(sce,celltype=="Epithelial")
+sce2 <- subset(sce2,group==group[length(group)])
+sce2$celltype_new <- ifelse(sce2$celltype == "Epithelial", sce2$infected ,as.character(sce2$celltype_new))
+gene_list <- c("MDK","SDC1","SDC2","SDC4","LRP1","NCL","ITGA6","ITGB1")
+exprs <- data.frame(FetchData(object = sce2, vars = c("celltype_new",gene_list)))
+exprs$Proj <- "Epithelial"
+exprs$Cell <- rownames(exprs)
+exprs.melt <- reshape2::melt(exprs,                              
+                             id.vars = c("Cell","celltype_new","Proj"),                              
+                             measure.vars = gene_list,                             
+                             variable.name = "gene",                              
+                             value.name = "Expr")
+  
+p2 <-  ggplot()+  
+  geom_half_violin(data = exprs.melt[exprs.melt$celltype_new == 'Bystander',],                   
+                   aes(x = Proj, y = Expr, fill = celltype_new),
+                   color = 'black',                   
+                   scale = 'width') +   
+  facet_grid(cols = vars(gene), scales = 'free') +   
+  geom_half_violin(data = exprs.melt[exprs.melt$celltype_new == 'Infected',],                   
+                   aes(x = Proj, y = Expr, fill = celltype_new),                   
+                   color = 'black',                   
+                   scale = 'width',                   
+                   side = 'r') +   
+  facet_grid(cols = vars(gene), scales = 'free')+
+  theme_bw() +  
+  theme(panel.grid = element_blank()) +  
+  scale_fill_manual(values = c("#E39A35","#68A180")) +  
+  labs(x = "", y = 'Expression Level') #y轴标题本文内容修改
+
+
+
+pdf(paste0(outdir,"/","09-",gene,"-MDK-NCL.pdf"),height=12,width=12)
+pal <- viridis(n = 10, option = "D")
+p1
+p2
+##MDK
+DimPlot(sce, reduction = 'umap', group.by = 'celltype_new',label = TRUE, pt.size = 0.5)+FeaturePlot_scCustom(seurat_object = sce, features = "MDK", colors_use = pal)
+FeaturePlot_scCustom(seurat_object = sce, features = "MDK", split.by = "group",num_columns = 2,colors_use = pal)
+##NCL
+DimPlot(sce, reduction = 'umap', group.by = 'celltype_new',label = TRUE, pt.size = 0.5)+FeaturePlot_scCustom(seurat_object = sce, features = "NCL", colors_use = pal)
+FeaturePlot_scCustom(seurat_object = sce, features = "NCL", split.by = "group",num_columns = 2,colors_use = pal)
+dev.off()
+
+
+
+
