@@ -69,6 +69,7 @@ Idents(sce, cells = colnames(sce.mye)) <- Idents(sce.mye)
 sce$celltype_new <- Idents(sce)
 rm(sce.mye)
 sce <- subset(sce,orig.ident=="VG161_3D_2")
+sce$celltype_new <- ifelse(sce$celltype == "Epithelial", sce$infected ,as.character(sce$celltype_new))
 
 ###### Seurat-Mapping ######
 anchors <- FindTransferAnchors(reference = sce, 
@@ -81,9 +82,12 @@ predictions.assay <- TransferData(anchorset = anchors,
                                   dims = 1:30)
 predictions.res <- predictions.assay@data
 
-pdf(paste0(outdir,"/","02-",gene,"-anno.pdf"))
+sct[["predictions"]] <- predictions.assay
+save(sct,file="~/rawdata/SCT/analysis/virus_3D_1/virus_3D_anno.RData")
+
+pdf(paste0(outdir,"/","02-",gene,"-anno_infected.pdf"))
 DefaultAssay(sct) <- "predictions"
-SpatialFeaturePlot(sct, features = c("Macrophage","Tcell","Epithelial"),
+SpatialFeaturePlot(sct, features = c("Macrophage","Tcell","Epithelial","Infected"),
                    pt.size.factor = 3, ncol = 3, crop = TRUE)
 dev.off()
 
@@ -97,7 +101,7 @@ mat[mat < 0.1] <- 0
 
 # 颜色定义
 paletteMartin <- c(
-  "#000000","#004949","#009292","#ff6db6","#ffb6db",
+ "#004949","#009292","#ff6db6","#ffb6db",
   "#490092","#006ddb","#b66dff","#6db6ff","#b6dbff",
   "#920000","#924900","#db6d00","#24ff24","#ffff6d")
 
@@ -209,6 +213,8 @@ plotSpatialScatterpie(
 
 
 ##### 病毒感染 #####
+
+DefaultAssay(sct) <- "SCT"
 VirTranscript <- function(obj,viral_genes){
   viral_counts <- FetchData(obj, vars = viral_genes, slot = 'counts')
   viral_counts_total <- rowSums(viral_counts)
@@ -218,6 +224,7 @@ VirTranscript <- function(obj,viral_genes){
   return(obj)
 }
 
+pdf(paste0(outdir,"/","03-",gene,"-infected.pdf"))
 viral_genes <-  rownames(sct@assays$SCT)[grep("VG161", rownames(sct@assays$SCT))]
 sct <- VirTranscript(sct,viral_genes)
 SpatialFeaturePlot(sct, features = "VG161_transcript",pt.size.factor = 3)
@@ -226,3 +233,6 @@ SpatialFeaturePlot(sct, features = "VG161_transcript",pt.size.factor = 3)
 viral_genes <-  rownames(sce@assays$SCT)[grep("VG161", rownames(sce@assays$SCT))]
 sct[["VG161"]] <- PercentageFeatureSet(sct,pattern = c("^VG161-UL","^VG161-ICP"))
 SpatialFeaturePlot(sct, features = "VG161",pt.size.factor = 3)
+
+dev.off()
+
