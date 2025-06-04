@@ -19,7 +19,7 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")
 sce <- subset(sce,celltype=="Myeloid")
 
 
@@ -38,7 +38,7 @@ bestpc=1:pcs
 sce<- sce %>% RunUMAP(reduction = "harmony", dims = bestpc) %>% 
   FindNeighbors(reduction = "harmony", dims = bestpc)
 sce=FindClusters(sce,resolution = 0.3)#需要对粒度进行调整
-save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_mye.RData")
+save(sce,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D_mye.RData")
 
 pdf(paste0(outdir,"/","07-",gene,"-mye.pdf"),height=10,width=6)
 DimPlot(sce, reduction = 'umap', group.by = 'seurat_clusters',label = TRUE, pt.size = 0.5)
@@ -57,7 +57,7 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_mye.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_mye.RData")
 
 ###### genes to check ######
 markers <- c("ADGRE1","CD68","CD86","CD163",  #macrophage           
@@ -70,6 +70,7 @@ markers_plot <- data.frame(cluster = c(rep("Macrophage",4),
                                        rep("DC cell",5)),                                  
                            gene = markers)
 
+# sce_X <- subset(sce,idents=c(0,1,2,4))
 pdf(paste0(outdir,"/","07-",gene,"-mye_markers.pdf"),height=10,width=6)
 jjDotPlot(object = sce,          
           markerGene = markers_plot,          
@@ -82,19 +83,20 @@ dev.off()
 
 
 ###### annotation ######
-celltype <- c(    "0"="other Myeloid",
-                  "1"="other Myeloid",
+celltype <- c(    "0"="DC cell",
+                  "1"="DC cell",
                   "2"="Macrophage",
-                  "3"="DC cell",
-                  "4"="Monocyte",
-                  "5"="other Myeloid",
-                  "6"="Macrophage",
-                  "7"="DC cell",
-                  "8"="Macrophage",
-                  "9"="Macrophage",
-                  "10" = "other Myeloid")
+                  "3"="Macrophage",
+                  "4"="Macrophage",
+                  "5"="Macrophage",
+                  "6"="DC cell",
+                  "7"="Macrophage",
+                  "8"="Monocyte",
+                  "9"="DC cell",
+                  "10" = "DC cell",
+                  "11" = "DC cell")
 sce@meta.data$mye_type <- celltype[sce@meta.data$seurat_clusters]
-save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_mye.RData")
+save(sce,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D_mye.RData")
 
 ###### plotting ######
 pdf(paste0(outdir,"/","07-",gene,"-mye_ratio.pdf"),height=8,width=12)
@@ -109,7 +111,7 @@ rownames(cellper) <- cellper[,1]
 cellper <- cellper[,-1]
 #添加分组信息
 sample <- unique(sce$orig.ident)
-group <- sub("(_1|_2|_3)$", "", sample)
+group <- sub("(_1|_2|_3|1|2)$", "", sample)
 samples <- data.frame(sample, group)#创建数据框
 
 rownames(samples)=samples$sample
@@ -124,7 +126,7 @@ library(cowplot)
 for(group_ in sce_groups){
   cellper_  = cellper[,c('sample','group',group_)]
   colnames(cellper_) = c('sample','group','percent')#对选择数据列命名
-  cellper_$group <- factor(cellper_$group , levels =c("Vehicle_3D","VG161_3D"))
+  cellper_$group <- factor(cellper_$group , levels =c("Vehicle_5D","VG161_5D_R","VG161_5D_L"))
   cellper_$percent = as.numeric(cellper_$percent)#数值型数据
   cellper_ <- cellper_ %>% group_by(group) %>% mutate(upper =  quantile(percent, 0.75), 
                                                       lower = quantile(percent, 0.25),
@@ -140,7 +142,7 @@ for(group_ in sce_groups){
     theme_cowplot() +
     theme(axis.text = element_text(size = 10,angle = 45, hjust = 1),axis.title = element_text(size = 10),legend.text = element_text(size = 10),
           legend.title = element_text(size = 10),plot.title = element_text(size = 10,face = 'plain')) + 
-    labs(title = group_,y=paste0(group_,"/T cells")) +
+    labs(title = group_,y=paste0(group_)) +
     geom_errorbar(aes(ymin = lower, ymax = upper),col = "grey60",width =  1)
   
   pplist[[group_]] = pp1
@@ -171,11 +173,11 @@ setwd('~/rawdata')
 gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_mye.RData") 
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_mye.RData") 
 
 ##合并
 sce.mye <- sce   # 细分后的亚群
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")  # 原数据集
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")  # 原数据集
 sce <- subset(sce,celltype %in% c("Epithelial","Myeloid"))
 Idents(sce.mye) <- "mye_type" # 设置亚群标识
 Idents(sce) <- "celltype"
@@ -232,7 +234,7 @@ cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
 #cellchat <- netEmbedding(cellchat, type = "structural")
 #cellchat <- netClustering(cellchat, type = "structural")
 
-save(cellchat,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_chat_mye.rds")
+save(cellchat,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D_chat_mye.rds")
 
 
 ###### 细胞互作--实验组分析 ######
@@ -247,7 +249,7 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_chat_mye.rds")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_chat_mye.rds")
 library(CellChat)
 library(ggalluvial)
 
@@ -315,13 +317,13 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_mye.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_mye.RData")
 library(CellChat)
 library(ggalluvial)
 
 ##合并
 sce.mye <- sce   # 细分后的亚群
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")  # 原数据集
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")  # 原数据集
 sce <- subset(sce,celltype %in% c("Epithelial","Myeloid"))
 Idents(sce.mye) <- "mye_type" # 设置亚群标识
 Idents(sce) <- "celltype"
@@ -379,9 +381,9 @@ cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
 #cellchat <- netClustering(cellchat, type = "structural")
 
 cellchat_0 <- cellchat
-save(cellchat_0,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_chat0_mye.rds")
+save(cellchat_0,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D_chat0_mye.rds")
 # cellchat_1 <- cellchat
-# save(cellchat_1,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_chat1_mye.rds")
+# save(cellchat_1,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D_chat1_mye.rds")
 
 
 ###### 细胞互作--差异分析 ######
@@ -398,8 +400,8 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_chat1_mye.rds")
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_chat0_mye.rds")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_chat1_mye.rds")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_chat0_mye.rds")
 
 
 ##合并对象
@@ -442,11 +444,11 @@ setwd('~/rawdata')
 gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_mye.RData") 
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_mye.RData") 
 
 ##合并
 sce.mye <- sce   # 细分后的亚群
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")  # 原数据集
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")  # 原数据集
 sce <- subset(sce,celltype %in% c("Epithelial","Myeloid"))
 Idents(sce.mye) <- "mye_type" # 设置亚群标识
 Idents(sce) <- "celltype"
@@ -538,11 +540,11 @@ setwd('~/rawdata')
 gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_mye.RData") 
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_mye.RData") 
 
 ##合并
 sce.mye <- sce   # 细分后的亚群
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")  # 原数据集
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")  # 原数据集
 Idents(sce.mye) <- "mye_type" # 设置亚群标识
 Idents(sce) <- "celltype"
 Idents(sce, cells = colnames(sce.mye)) <- Idents(sce.mye)

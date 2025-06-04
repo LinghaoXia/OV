@@ -11,7 +11,7 @@ setwd('~/rawdata')
 gene = "SCT"
 outdir = paste0("~/OV/",gene)
 
-sct <- Load10X_Spatial(data.dir ="./SCT/result/3D_VG161_2/outs", 
+sct <- Load10X_Spatial(data.dir ="./SCT/result/5D_VG161_2/outs", 
                                filename = "filtered_feature_bc_matrix.h5")
 
 pdf(paste0(outdir,"/","01-",gene,"-pre.pdf"))
@@ -41,7 +41,7 @@ DimPlot(sct, reduction = "umap", label = TRUE)
 SpatialDimPlot(sct, label = TRUE, label.size = 3,pt.size.factor = 3)
 dev.off()
 
-save(sct,file="~/rawdata/SCT/analysis/virus_3D_1/virus_3D_cluster.RData")
+save(sct,file="~/rawdata/SCT/analysis/virus_5D_1/virus_5D_cluster.RData")
 
 ##### 结合单细胞数据注释细胞类型 #####
 library(Seurat)
@@ -56,34 +56,37 @@ setwd('~/rawdata')
 gene = "SCT"
 outdir = paste0("~/OV/",gene)
 
-load("~/rawdata/SCT/analysis/virus_3D_1/virus_3D_cluster.RData")
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_mye.RData") 
+load("~/rawdata/SCT/analysis/virus_5D_1/virus_5D_cluster.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_mye.RData") 
 
 
 ##合并
 sce.mye <- sce   # 细分后的亚群
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")  # 原数据集
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")  # 原数据集
 Idents(sce.mye) <- "mye_type" # 设置亚群标识
 Idents(sce) <- "celltype"
 Idents(sce, cells = colnames(sce.mye)) <- Idents(sce.mye)
 sce$celltype_new <- Idents(sce)
 rm(sce.mye)
-sce <- subset(sce,orig.ident=="VG161_3D_2")
+sce <- subset(sce,orig.ident=="VG161_5D_R2")
 sce$celltype_new <- ifelse(sce$celltype == "Epithelial", sce$infected ,as.character(sce$celltype_new))
 
 ###### Seurat-Mapping ######
-anchors <- FindTransferAnchors(reference = sce, 
+##平衡采样，每种取300个
+sce_sub <- subset(sce, cells = unlist(lapply(split(Cells(sce), sce$celltype_new), function(x) head(x, 300))))
+DefaultAssay(sct) <- "SCT"
+anchors <- FindTransferAnchors(reference = sce_sub, 
                                query = sct, 
                                normalization.method = "SCT")
 predictions.assay <- TransferData(anchorset = anchors, 
-                                  refdata = sce$celltype_new, 
+                                  refdata = sce_sub$celltype_new, 
                                   prediction.assay = TRUE,
                                   weight.reduction = sct[["pca"]], 
                                   dims = 1:30)
 predictions.res <- predictions.assay@data
 
 sct[["predictions"]] <- predictions.assay
-save(sct,file="~/rawdata/SCT/analysis/virus_3D_1/virus_3D_anno.RData")
+save(sct,file="~/rawdata/SCT/analysis/virus_5D_1/virus_5D_anno.RData")
 
 pdf(paste0(outdir,"/","02-",gene,"-anno_infected.pdf"))
 DefaultAssay(sct) <- "predictions"
@@ -180,8 +183,11 @@ res <- SPOTlight(
   gene_id = "gene")
 
 sct[["SPOTlight"]] <- CreateAssayObject(t(res$mat))
+pdf(paste0(outdir,"/","02-",gene,"-spotlight_infected.pdf"))
 DefaultAssay(sct) <- "SPOTlight"
-
+SpatialFeaturePlot(sct, features = c("Macrophage","Tcell","Epithelial","Infected"),
+                   pt.size.factor = 3, ncol = 3, crop = TRUE)
+dev.off()
 ### 结果可视化
 head(mat <- res$mat)[, seq_len(length(unique(scm$celltype_new)))]
 mod <- res$NMF
@@ -210,6 +216,10 @@ plotSpatialScatterpie(
     values = pal,
     breaks = names(pal))
 
+pdf(paste0(outdir,"/","02-",gene,"-anno_spotlight.pdf"))
+plotSpatialScatterpie(x = spe, y = mat, cell_types = colnames(mat), img = FALSE, scatterpie_alpha = 1, pie_scale = 0.4) +
+  scale_fill_manual(values = pal, breaks = names(pal))
+dev.off()
 
 
 ##### 病毒感染 #####
