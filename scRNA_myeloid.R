@@ -249,7 +249,7 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_5D/virus_5D_chat_mye.rds")
+load("~/rawdata/scRNA_virus/virus_3D/virus_3D_chat_mye.rds")
 library(CellChat)
 library(ggalluvial)
 
@@ -285,15 +285,20 @@ levels(cellchat@idents)
 netVisual_bubble(cellchat, sources.use = 1, targets.use = c(1:6), remove.isolate = FALSE, thresh = 0.01)
 netVisual_bubble(cellchat, sources.use = 3, targets.use = c(1:6), remove.isolate = FALSE, thresh = 0.01)
 netVisual_bubble(cellchat, sources.use = 4, targets.use = c(1:6), remove.isolate = FALSE, thresh = 0.01)
+##总体热图
+par(mfrow=c(1,1))
+netVisual_heatmap(cellchat, color.heatmap = "Reds",measure="weight")
 dev.off()
 
 
 ###单个信号通路分析
-pdf(paste0(outdir,"/","07-",gene,"-mye_chat_.pdf"),height=8,width=12)
+pdf(paste0(outdir,"/","07-",gene,"-mye_chat_MDK.pdf"),height=8,width=12)
 cellchat@netP$pathways  #查看都有哪些信号通路
+levels(cellchat@idents) 
+pathways.show <- "MK"
 ##层次图,要找到一个明显的通路先，下面同理
-vertex.receiver = c(2,3,8)
-netVisual_aggregate(cellchat, signaling = "PROS",  vertex.receiver = vertex.receiver,layout="hierarchy")
+vertex.receiver = c(1,3,4)
+netVisual_aggregate(cellchat, signaling = "MK",  vertex.receiver = vertex.receiver,layout="hierarchy")
 ##圈图
 par(mfrow=c(1,1))
 netVisual_aggregate(cellchat, signaling ="MK", layout = "circle")
@@ -302,6 +307,16 @@ par(mfrow=c(1,1))
 netVisual_heatmap(cellchat, signaling = "MK", color.heatmap = "Reds")
 #配体-受体层级的可视化
 netAnalysis_contribution(cellchat, signaling = pathways.show)
+pairLR <- extractEnrichedLR(cellchat, signaling = pathways.show, geneLR.return = FALSE) #提取对TGFb有贡献的所有配体受体 
+#提取对这个通路贡献最大的配体受体对来展示（也可以选择其他的配体受体对）
+LR.show <- pairLR[6,] 
+vertex.receiver = c(1,3,4) # a numeric vector
+netVisual_individual(cellchat, signaling = pathways.show,  pairLR.use = LR.show, vertex.receiver = vertex.receiver,,layout="hierarchy")
+netVisual_individual(cellchat, signaling = pathways.show, pairLR.use = LR.show, layout = "circle")
+netVisual_individual(cellchat, signaling = pathways.show, pairLR.use = LR.show, layout = "chord")
+#基因表达
+plotGeneExpression(cellchat, signaling = "MK")
+plotGeneExpression(cellchat, signaling = "MK", type = "dot",color.use = "#8CBF87")
 dev.off()
 
 
