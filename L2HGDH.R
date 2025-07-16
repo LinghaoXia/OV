@@ -310,3 +310,148 @@ plotc1
 plotc2
 plotc3
 dev.off()
+
+
+##### 蛋白组 #####
+library(tidyverse)
+library(patchwork)
+library(dplyr)
+library(ggplot2)
+library(data.table)
+library(do)
+library(limma)
+library(pheatmap)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(gt) # 制作表格
+
+rm(list=ls())
+gc()
+getwd()
+setwd('~/rawdata')
+gene = "L2HGDH"
+outdir = paste0("~/OV/",gene)
+
+pro <- fread("~/rawdata/L-2h_rnaseq/LLC-proteome-ubi.csv")
+group <- factor(c(rep("NC", 3), rep("SH", 6)))
+
+
+##顺转/稳转
+expr_data <- as.data.frame(pro[,c(4,5:13)])
+rownames(expr_data) <- expr_data[,1]
+expr_data <- expr_data[,-1]
+# 对数转换
+expr_log2 <- log2(expr_data + 1)
+# z-score标准化（按蛋白）
+expr_scaled <- t(scale(t(expr_log2)))  # 行标准化（每个蛋白）
+# 构建设计矩阵
+design <- model.matrix(~ 0 + group)
+colnames(design) <- levels(group)
+# 构建对比矩阵
+contrast.matrix <- makeContrasts(SH_vs_NC = SH - NC, levels = design)
+# 使用 limma 分析
+fit <- lmFit(expr_scaled, design)
+fit2 <- contrasts.fit(fit, contrast.matrix)
+fit2 <- eBayes(fit2)
+# 获取结果
+results <- topTable(fit2, coef = "SH_vs_NC", number = Inf, adjust.method = "BH")
+
+##绘制热图
+# 筛选显著差异蛋白（可自定义阈值）
+sig_prots <- results[which(results$P.Value < 0.05 & abs(results$logFC) > 1), ]
+write.csv(sig_prots,file=paste0(outdir,"/Proteome-",gene,"-pheatmaap-virus.csv"),row.names = TRUE)
+# 选取前100的蛋白
+sig_prots_sorted <- sig_prots[order(abs(sig_prots$logFC), decreasing = TRUE), ]
+top100_sig_prots <- sig_prots_sorted[1:50, ]
+sig_ids <- rownames(top100_sig_prots)
+#加上要看的
+sig_ids <- c(sig_ids,
+"Ubiquitin-like protein ISG15",
+"Ubiquitin-like modifier-activating enzyme 7",
+"E3 ubiquitin-protein ligase TM129",
+"E3 ubiquitin-protein ligase MARCHF6",
+"E3 ubiquitin-protein ligase RNF149",
+"Ubiquitin domain-containing protein 1",
+"Ubiquitin-like protein 3")
+
+# 从表达矩阵中提取这些蛋白的表达值
+heat_data <- expr_scaled[sig_ids, ]
+# 构建分组信息
+group <- c(rep("NC", 3), rep("SH", 6))
+subgroup <- c(rep("NC", 3), rep("SH1", 3),rep("SH2", 3))
+annotation_col <- data.frame(
+  Group = factor(group),
+  Subgroup = factor(subgroup)
+)
+rownames(annotation_col) <- colnames(heat_data)
+
+# 绘制热图
+pdf(paste0(outdir,"/Proteome-",gene,"-pheatmaap-virus.pdf"),height=16,width=12)
+pheatmap(
+  heat_data,
+  scale = "row",  # 每行（蛋白）标准化
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  annotation_col = annotation_col,
+  fontsize_row = 6,
+  fontsize_col = 10,
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+  main = "Significant Differential Proteins_Stable"
+)
+dev.off()
+
+# 绘制火山图
+special_genes <- read.csv("~/rawdata/L-2h_rnaseq/ubi.csv", stringsAsFactors = FALSE)[[1]]
+# 添加注释列
+results$gene_name <- rownames(results)
+# 添加标识字段
+# 计算显著性
+cut_off_FDR =0.05 #设置FDR的阈值
+cut_off_log2FC =1 #设置log2FC的阈值
+results$Significance <- "Not Sig"
+results$Significance[results$P.Value < 0.05 & results$logFC > 1]  <- "Up"
+results$Significance[results$P.Value  < 0.05 & results$logFC < -1] <- "Down"
+# 添加是否是 special gene 的列
+results$Special <- ifelse(results$gene_name %in% special_genes, "Special", "Other")
+Up_top_10 =(     #筛选差异显著上调的前10个Gene
+  results %>%
+    filter(Significance == 'Up') %>%
+    arrange(P.Value, desc(abs(logFC))) %>%
+    filter(Special == "Special")
+)
+Up_top_10 %>% gt() #数据制成表
+Down_top_10 = (       #筛选差异显著下调的前10个Gene
+  results %>%
+    filter(Significance == 'Down') %>%
+    arrange(P.Value, desc(abs(logFC))) %>%
+    filter(Special == "Special")
+)
+Down_top_10 %>% gt() #数据制成表
+
+
+
+pdf(paste0(outdir,"/Proteome-",gene,"-volcano-sz.pdf"),height=14,width=12)
+ggplot(results, aes(x =logFC, y= -log10(P.Value), colour=Significance)) + #x、y轴取值限制，颜色根据"Sig"
+  geom_point(alpha=0.65, size=2) +  #点的透明度、大小
+  scale_color_manual(values=c("#546de5", "#d2dae2","#ff4757")) + xlim(c(-2, 2)) +  #调整点的颜色和x轴的取值范围
+  geom_hline(yintercept=-log10(cut_off_FDR),lty=4,col="black",lwd=0.8) + #添加x轴辅助线,lty函数调整线的类型："twodash"、"longdash"、"dotdash"、"dotted"、"dashed"、"solid"、"blank"
+  geom_vline(xintercept = c(-cut_off_log2FC,cut_off_log2FC), lty=4,col="black",lwd=0.8) +  #添加y轴辅助线
+  labs(x="log2FC", y="-log10FDR") +  #x、y轴标签
+  ggtitle("Significant Differential Proteins_Transient") + #标题
+  theme_bw() + # 主题，help(theme)查找其他个性化设置
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position="right", 
+        legend.title = element_blank()
+  )+geom_label_repel(data = Up_top_10,
+                     aes(logFC, -log10(P.Value), label = gene_name),
+                     size = 5, fill="#CCFFFF",
+                     alpha = 0.65, color = "black")+
+  geom_label_repel(data = Down_top_10,
+                   aes(logFC, -log10(P.Value), label = gene_name),
+                   size = 5, fill="#FFCCCC",
+                   alpha = 0.65, color = "black")+
+  coord_cartesian(ylim = c(1, max(-log10(results$P.Value), na.rm = TRUE))) # 设置y轴的范围
+
+dev.off()
