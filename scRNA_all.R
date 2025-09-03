@@ -13,7 +13,7 @@ outdir = paste0("~/OV/",gene)
 ##### 整理数据 #####
 ##virus_3D
 setwd('~/rawdata/scRNA_virus/virus_3D')
-folders=list.files('./')
+folders <- Filter(dir.exists, list.files(".", full.names = F))
 folders
 library(Seurat)
 scList = lapply(folders,function(folder){ 
@@ -22,12 +22,11 @@ scList = lapply(folders,function(folder){
                      min.cells = 3, min.features = 200)
 })
 
-virus_3D <- merge(scList[[1]], 
+sce <- merge(scList[[1]], 
                   y = c(scList[[2]],scList[[3]],scList[[4]]),
                   add.cell.ids = c("Vehicle_3D_1","Vehicle_3D_2","VG161_3D_1","VG161_3D_2"), 
                   project = "virus_3D")
-
-save(virus_3D,file="virus_3D.RDS")
+save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D.RData")
 
 ##virus_5D
 setwd('~/rawdata/scRNA_virus/virus_5D')
@@ -80,10 +79,13 @@ plan("multisession", workers = 16)
 options(future.globals.maxSize= 1024^4)
 plan()
 rm(list=ls())
+gc()
+
+setwd('~/rawdata')
+gene = "scRNA_virus"
+outdir = paste0("~/OV/",gene)
 ##virus_3D
-load("~/rawdata/scRNA_virus/virus_PD1/virus_PD1.RDS")
-sce <- virus_PD1
-###########SCTransform V2标准化质控降维
+load("~/rawdata/scRNA_virus/virus_3D/virus_3D.RData")
 sce[["percent.mt"]] <- PercentageFeatureSet(sce, pattern = "^MT-")
 preQC <- VlnPlot(sce, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3,
                  group.by = "orig.ident", 
@@ -91,19 +93,99 @@ preQC <- VlnPlot(sce, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
 #细胞基因数量与mRNA、核糖体基因数量的相关性
 plot1 <- FeatureScatter(sce, feature1 = "nCount_RNA", feature2 = "percent.mt")
 plot2 <- FeatureScatter(sce, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
-plot1 + plot2
+plot2
 
 sce <- subset(sce, subset = nFeature_RNA > 200  & nFeature_RNA < 5000 & percent.mt < 15)
 postQC <- VlnPlot(sce, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3,
                   group.by = "orig.ident", 
                   pt.size = 0)
-sce <- FindVariableFeatures(sce, selection.method = "vst", nfeatures = 2000)
 #top10 <- head(VariableFeatures(scRNA), 10)
 #plot1 <- VariableFeaturePlot(scRNA) 
 #LabelPoints(plot = plot1, points = top10, repel = TRUE, size=2.5) 
 #如下图，横坐标是某基因在所有细胞中的平均表达值，纵坐标是此基因的方差;红点即为高变基因（2000个）
+
+###### NormalizeData ######
+sce <- NormalizeData(sce, normalization.method = "LogNormalize", scale.factor = 1e4)  #对数据进行标准化
+sce <- FindVariableFeatures(sce, selection.method = 'vst', nfeatures = 2000) #寻找高变基因
+# 找出前10高可变基因用于后续可视化
+top10 <- head(VariableFeatures(sce), 10)
+# 高变基因可视化
+plot1 <- VariableFeaturePlot(sce)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot2
+# PCA前的scale和PCA
+all.genes <- rownames(sce)
+sce <- ScaleData(sce, features = all.genes)
+sce <- ScaleData(sce, vars.to.regress = "percent.mt")
+sce <- RunPCA(sce, features = VariableFeatures(object = sce)) #默认最大PC数为50，可查阅函数help自行修改参数
+# 线性降维（PCA），默认用高变基因集，但也可通过features参数自己指定；
+sce <- RunPCA(sce,features=VariableFeatures(object=sce))
+# 检查PCA分群结果，这里只展示前12个PC，每个PC只显示3个基因；
+print(sce[["pca"]],dims=1:12,nfeatures = 3)
+# # 方法1：Jackstraw置换检验算法：重复取样（原数据的1%），重跑PCA，鉴定p-value较小的PC；计算’null distribution‘（即零假设成立时）时的基因scores；
+# sce <- JackStraw(sce,num.replicate = 100)
+# sce <- ScoreJackStraw(sce,dims=1:20)
+# JackStrawPlot(sce,dims=1:30)
+# # 方法2：肘部图（碎石图），基于每个主成分对方差解释率的排名；
+# ElbowPlot(sce)
+# 方法3：生信技能树
+pct <- sce [["pca"]]@stdev / sum( sce [["pca"]]@stdev) * 100
+cumu <- cumsum(pct)
+co1 <- which(cumu > 90 & pct < 5)[1]
+co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+pcs <- min(co1, co2)
+plot_df <- data.frame(pct = pct,   cumu = cumu,   rank = 1:length(pct))
+ggplot(plot_df, aes(cumu, pct, label = rank, color = rank > pcs)) + 
+  geom_text() + 
+  geom_vline(xintercept = 90, color = "grey") + 
+  geom_hline(yintercept = min(pct[pct > 5]), color = "grey") +
+  theme_bw()
+# 基于PCA空间中的欧式距离计算nearest neighbor graph，优化任意两个细胞间的距离权重（输入上一步得到的PC维数）；
+sce <- FindNeighbors(sce, dims = 1:13) # 前10个PC
+# 用umap的方法，并可视化
+sce <- RunUMAP(sce, dims = 1:13)
+# 用tsne的方法，并可视化
+sce <- RunTSNE(sce,dims=1:13)
+
+###### 合适的分辨率 ######
+#接着优化模型，resolution参数决定下游聚类分析得到的分群数，对于3k左右的细胞，设为0.4-1.2能得到较好的结果（官方说明）；如果数据量增大，该参数也应该适当增大；
+library(clustree)
+library(patchwork)
+library(cluster)
+sce <- FindClusters(sce, resolution = c(seq(.1,1.5,.1))) # 多个分辨率
+clustree(sce, prefix = 'RNA_snn_res.') + coord_flip()
+clustree_plt <- clustree(sce, prefix = 'RNA_snn_res.')
+cell_dists <- dist(sce@reductions$pca@cell.embeddings,method = "euclidean")
+head(cell_dists)
+cluster_info <- sce@meta.data[,grepl(paste0(DefaultAssay(sce),"_snn_res"),
+                                     colnames(sce@meta.data))] %>%
+  dplyr::mutate_all(as.character) %>%
+  dplyr::mutate_all(as.numeric)
+head(cluster_info)[,1:8]
+si= silhouette(cluster_info[,1], cell_dists) %>%head()
+si
+silhouette_res <- apply(cluster_info, 2, function(x){
+  si <- silhouette(x, cell_dists)
+  if(!any(is.na(si))) {
+    mean(si[, 'sil_width'])
+  } else {
+    NA
+  }
+})
+head(silhouette_res)#峰顶最优
+sce[["opt_clust_integrated"]] <- sce[[names(which.max(silhouette_res))]]
+Idents(sce) = "opt_clust_integrated"
+# 去除多余分辨率
+spam_cols <- grepl(paste0(DefaultAssay(sce), "_snn_res"),
+                   colnames(sce@meta.data)) |
+  grepl("seurat_clusters",colnames(sce@meta.data))
+sce@meta.data <- sce@meta.data[,!spam_cols]
+
+
+###### SCTransform V2标准化质控降维 ######
 ###########Harmony去批次后降维
 sce <- SCTransform(sce,vst.flavor = "v2", verbose = FALSE, method = "glmGamPoi",vars.to.regress = "percent.mt")
+sce <- FindVariableFeatures(sce, selection.method = "vst", nfeatures = 2000)
 sce=RunPCA(sce,assay="SCT",verbose = FALSE)
 ##去批次
 sce=RunHarmony(sce,group.by.vars="orig.ident",assay.use="SCT", plot_convergence = TRUE,max.iter.harmony =50 )
@@ -121,10 +203,13 @@ bestpc=1:pcs
 sce<- sce %>% RunUMAP(reduction = "harmony", dims = bestpc) %>% 
   FindNeighbors(reduction = "harmony", dims = bestpc)
 sce=FindClusters(sce,resolution = 0.5)#需要对粒度进行调整
+
+
+###### 可视化 ######
 #保存结果
-#sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),'VG161','Vehicle')
-#sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),ifelse(grepl("_L",sce@meta.data$orig.ident),"VG161_L","VG161_R"),'Vehicle')
-sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),ifelse(grepl("_L",sce@meta.data$orig.ident),"PD1_VG161_L","PD1_VG161_R"),'PD1')
+sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),'VG161','Vehicle')
+# #sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),ifelse(grepl("_L",sce@meta.data$orig.ident),"VG161_L","VG161_R"),'Vehicle')
+# sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),ifelse(grepl("_L",sce@meta.data$orig.ident),"PD1_VG161_L","PD1_VG161_R"),'PD1')
 
 pdf(paste0(outdir,"/","01-",gene,"-cluster_sample.pdf"),height=10,width=6)
 DimPlot(sce, reduction = "umap", group.by = "group",label = TRUE,repel = T, pt.size = .1)
@@ -134,7 +219,7 @@ pdf(paste0(outdir,"/","01-",gene,"-cluster.pdf"),height=10,width=6)
 DimPlot(sce, reduction = "umap",label = TRUE,repel = T, pt.size = .1)
 dev.off()
 
-save(sce,file = "~/rawdata/scRNA_virus/virus_PD1/virus_PD1_cluster.RData")
+save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_cluster.RData")
 
 ##### 自动注释-singleR #####
 library(SingleR)
@@ -237,7 +322,7 @@ library(patchwork)
 rm(list=ls())
 gc()
 
-load("~/rawdata/scRNA_virus/virus_PD1/virus_PD1_cluster.RData")
+load("~/rawdata/scRNA_virus/virus_3D/virus_3D_cluster.RData")
 ##详细
 # read.gmt=function(filename){
 #   if(! file.exists(filename)) stop('File ',filename,' not available\n')
@@ -286,9 +371,87 @@ sce$celltype <- predictions.scina$cell_labels
 pdf(paste0(outdir,"/","02-",gene,"-anno.pdf"),height=20,width=12)
 DimPlot(sce, reduction = "umap",
                    group.by = "celltype",
-                   label = TRUE, label.size = 3, repel = TRUE)
+                   label = TRUE, label.size = 5, repel = TRUE)
 dev.off()
-save(sce,file = "~/rawdata/scRNA_virus/virus_PD1/virus_PD1_anno.RData")
+save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
+
+##### 手动细胞亚群注释 #####
+trace(scRNAtoolVis:::jjDotPlot, edit = T)
+library(Seurat) 
+library(ggplot2)
+library(dplyr)
+library(scRNAtoolVis)
+library(ggdendro)
+library(reshape2)
+library(cowplot)
+rm(list=ls())
+gc()
+
+setwd('~/rawdata')
+gene = "scRNA_virus"
+outdir = paste0("~/OV/",gene)
+
+
+load("~/rawdata/scRNA_virus/virus_3D/virus_3D_cluster.RData")
+
+###### genes to check ######
+markers <- c("EPCAM","CDH1","KRT19",  #Epithelial         
+             "CDH5","VWF",  #Endothelial
+             "COL1A1","DCN","LUM",#Fibroblast
+             "TPSAB1","MS4A2",#Mast 
+             "CD79A","CD19","MS4A1",#Bcell 
+             "CD3D","CD3E",#Tcell
+             "FCER1G","CD68"#Myeloid
+             )        
+
+markers_plot <- data.frame(cluster = c(rep("Epithelial",3),                                  
+                                       rep("Endothelial",2),                                  
+                                       rep("Fibroblast",3),
+                                       rep("Mast",2),
+                                       rep("Bcell",3),
+                                       rep("Tcell",2),
+                                       rep("Myeloid",2)),                                  
+                           gene = markers)
+# sce_X <- subset(sce,idents=c(0,1,2,4))
+pdf(paste0(outdir,"/","02-",gene,"-markers.pdf"),height=15,width=10)
+scRNAtoolVis::jjDotPlot(object = sce,          
+          markerGene = markers_plot,   
+          anno = TRUE,
+          id = 'opt_clust_integrated', 
+          ytree=T,
+          tree.pos = 'right',
+          textSize = 15,          
+          base_size= 15,          
+          plot.margin = c(8,1,3,1))
+dev.off()
+
+
+###### annotation ######
+groups <- list(
+  Epithelial = c("1","2","3","4","6","7","8","9","11","13","14","18","20","24"),
+  Myeloid    = c("21","0","22"),
+  Tcell      = c("16","10","15"),
+  Fibroblast = c("12","19"),
+  Mast       = c("23"),
+  Other      = c("5","17")
+)
+
+celltype <- unlist(lapply(names(groups), function(g) setNames(rep(g, length(groups[[g]])), groups[[g]])))
+
+sce@meta.data$celltype <- celltype[as.character(sce@meta.data$opt_clust_integrated)]
+pdf(paste0(outdir,"/","02-",gene,"-anno.pdf"),height=20,width=12)
+DimPlot(sce, reduction = "umap",
+        group.by = "celltype",
+        label = TRUE, label.size = 5, repel = TRUE)
+dev.off()
+sce <- subset(sce,celltype != "Other")
+pdf(paste0(outdir,"/","02-",gene,"-anno_remove.pdf"),height=20,width=12)
+DimPlot(sce, reduction = "umap",
+        group.by = "celltype",
+        label = TRUE, label.size = 5, repel = TRUE)
+dev.off()
+save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
+
 
 ##### 细胞比例 #####
 library(Seurat)
@@ -302,15 +465,15 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")
+load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
 table(sce$group)#查看各组细胞数
 prop.table(table(sce$celltype))
-table(sce$infected, sce$group)#各组不同细胞群细胞数
+table(sce$group)#各组不同细胞群细胞数
 
 
 pdf(paste0(outdir,"/","02-",gene,"-anno_ratio.pdf"),height=8,width=12)
 ##柱状图
-Cellratio <- prop.table(table(celltype=sce$celltype, group=sce$group), margin = 2)#计算各组样本不同细胞群比例
+Cellratio <- prop.table(table(celltype=sce$celltype, group=sce$orig.ident), margin = 2)#计算各组样本不同细胞群比例
 Cellratio <- as.data.frame(Cellratio)
 colourCount = length(unique(Cellratio$celltype))
 library(ggplot2)
@@ -324,61 +487,46 @@ ggplot(Cellratio) +
 
 
 ##比较散点图
-Cellratio <- prop.table(table(celltype=sce$celltype, group=sce$orig.ident), margin = 2)#计算各组样本不同细胞群比例
+# 计算比例（orig.ident 级别）
+Cellratio <- prop.table(table(celltype = sce$celltype, group = sce$orig.ident), margin = 2)
 Cellratio <- data.frame(Cellratio)
 
-library(reshape2)
-cellper <- dcast(Cellratio,group~celltype, value.var = "Freq")#长数据转为宽数据
+# 转宽格式
+cellper <- dcast(Cellratio, group ~ celltype, value.var = "Freq")
 rownames(cellper) <- cellper[,1]
 cellper <- cellper[,-1]
 
-#添加分组信息
+# 添加分组信息
 sample <- unique(sce$orig.ident)
 group <- sub("(_1|_2|1|2)$", "", sample)
-samples <- data.frame(sample, group)#创建数据框
+samples <- data.frame(sample, group)
+rownames(samples) <- samples$sample
 
-rownames(samples)=samples$sample
-cellper$sample <- samples[rownames(cellper),'sample']#R添加列
-cellper$group <- samples[rownames(cellper),'group']#R添加列
-pplist = list()
-sce_groups = unique(sce$celltype)
-library(ggplot2)
-library(dplyr)
-library(ggpubr)
-library(cowplot)
-for(group_ in sce_groups){
-  cellper_  = cellper[,c('sample','group',group_)]
-  colnames(cellper_) = c('sample','group','percent')#对选择数据列命名
-  cellper_$percent = as.numeric(cellper_$percent)#数值型数据
-  cellper_ <- cellper_ %>% group_by(group) %>% mutate(upper =  quantile(percent, 0.75), 
-                                                      lower = quantile(percent, 0.25),
-                                                      mean = mean(percent),
-                                                      median = median(percent))#上下分位数
-  print(group_)
-  print(cellper_$median)
-  
-  pp1 = ggplot(cellper_,aes(x=group,y=percent)) + #ggplot作图
-    geom_jitter(shape = 21,aes(fill=group),width = 0.25) + 
-    stat_summary(fun=mean, geom="point", color="grey60") +
-    theme_cowplot() +
-    theme(axis.text = element_text(size = 10,angle = 45, hjust = 1),axis.title = element_text(size = 10),legend.text = element_text(size = 10),
-          legend.title = element_text(size = 10),plot.title = element_text(size = 10,face = 'plain')) + 
-    labs(title = group_,y='Percentage') +
-    geom_errorbar(aes(ymin = lower, ymax = upper),col = "grey60",width =  1)
-  
-  pplist[[group_]] = pp1
-}
+cellper$sample <- samples[rownames(cellper),'sample']
+cellper$group <- samples[rownames(cellper),'group']
 
-library(cowplot)
-plot_grid(pplist[[1]],
-          pplist[[2]],
-          pplist[[3]],
-          pplist[[4]],
-          pplist[[5]],
-          pplist[[6]],
-          pplist[[7]])
+# 转成长格式
+cellper_long <- cellper %>%
+  pivot_longer(cols = -c(sample, group),
+               names_to = "celltype",
+               values_to = "percent") %>%
+  mutate(percent = as.numeric(percent))
+
+# 画箱线图 + jitter，分面
+ggplot(cellper_long, aes(x = group, y = percent, fill = group)) +
+  geom_boxplot(outlier.shape = NA, alpha=0.6) +   # 箱线图
+  geom_jitter(width = 0.2, shape=21, size=2, alpha=0.8) +   # jitter 点
+  facet_wrap(~ celltype, scales = "free_y") +    # 每个 celltype 一个分面
+  expand_limits(y = 0) + 
+  theme_bw() +
+  labs(x="Group", y="Percentage") +
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        axis.title = element_text(size = 12),
+        strip.background = element_rect(fill = "white", color = "black"),
+        strip.text = element_text(size = 12, face = "bold"))
 
 dev.off()
+
 
 
 ##### 病毒感染 #####
@@ -408,17 +556,17 @@ load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
 # sce@meta.data$infected <- ifelse(grepl("VG161",sce@meta.data$orig.ident),ifelse(infected_cells, "Infected", "Bystander"),"Naive")
 
 ##病毒总转录本
-VirTranscript <- function(obj,viral_genes){
-  viral_counts <- FetchData(obj, vars = viral_genes, slot = 'counts')
-  viral_counts_total <- rowSums(viral_counts)
-  total_counts <- rowSums(FetchData(obj,slot = 'counts',vars = rownames(obj))) 
-  scaled_viral_counts <- log2((viral_counts_total / total_counts) * 10000+1)
-  obj$VG161_transcript <- scaled_viral_counts
-  return(obj)
-}
-
-viral_genes <-  rownames(sce@assays$SCT)[grep("VG161", rownames(sce@assays$SCT))]
-sce <- VirTranscript(sce,viral_genes)
+# VirTranscript <- function(obj,viral_genes){
+#   viral_counts <- FetchData(obj, vars = viral_genes, slot = 'counts')
+#   viral_counts_total <- rowSums(viral_counts)
+#   total_counts <- rowSums(FetchData(obj,slot = 'counts',vars = rownames(obj))) 
+#   scaled_viral_counts <- log2((viral_counts_total / total_counts) * 10000+1)
+#   obj$VG161_transcript <- scaled_viral_counts
+#   return(obj)
+# }
+# 
+# viral_genes <-  rownames(sce@assays$RNA)[grep("VG161", rownames(sce@assays$RNA))]
+# sce <- VirTranscript(sce,viral_genes)
 
 # pdf(paste0(outdir,"/","03-",gene,"-infected.pdf"),height=20,width=12)
 # DimPlot(sce, group.by = "infected",split.by = "group", label = TRUE)
@@ -427,25 +575,32 @@ sce <- VirTranscript(sce,viral_genes)
 # dev.off()
 
 ##病毒总基因比例
-viral_genes <-  rownames(sce@assays$SCT)[grep("VG161", rownames(sce@assays$SCT))]
-sce[["VG161"]] <- PercentageFeatureSet(sce,pattern = c("^VG161-UL","^VG161-ICP"))
-VlnPlot(sce, features = "VG161",group.by = "group")
-
+viral_genes <-  rownames(sce@assays$RNA)[grep("VG161", rownames(sce@assays$RNA))]
 sce_Vehicle <- subset(sce,group=="Vehicle")
-threshold <- max(sce_Vehicle[["VG161"]])
-# VlnPlot(sce_Vehicle, features = "VG161",group.by = "celltype",y.max = 0.18)
+sce_Vehicle <- JoinLayers(sce_Vehicle, assay = "RNA")
+rowSums(sce_Vehicle[viral_genes, ]@assays$RNA)
+rm(sce_Vehicle)
 
-sce@meta.data$infected <- ifelse(grepl("VG161",sce@meta.data$orig.ident),ifelse(sce[["VG161"]]>threshold, "Infected", "Bystander"),"Naive")
+
+sce[["VG161"]] <- PercentageFeatureSet(sce,pattern = "^VG161-UL|^VG161-ICP|^VG161-US|^VG161-IRL")
+VlnPlot(sce, features = "VG161",group.by = "celltype",y.max = 0.18)
+# features <- viral_genes[grepl("^VG161-(UL|ICP|US|IRL)", viral_genes) & !grepl("^VG161-UL(36|24)\\b", viral_genes)]
+# sce[["VG161"]] <- PercentageFeatureSet(sce,features = features)
+VlnPlot(sce, features = "VG161",group.by = "group")
+# x <- FetchData(object = sce, vars = c("group",viral_genes))
+
+
+sce@meta.data$infected <- ifelse(grepl("VG161",sce@meta.data$orig.ident),ifelse(sce[["VG161"]]>0, "Infected", "Bystander"),"Naive")
 
 pdf(paste0(outdir,"/","03-",gene,"-infected.pdf"),height=20,width=12)
 VlnPlot(sce, features = "VG161",group.by = "group")
 DimPlot(sce, group.by = "infected",split.by = "group", label = TRUE,cols = c("#4DBBD5B2", "#DC0000B2","#91D1C2B2"),pt.size=1.2)
 DimPlot(sce, group.by = "infected",label = TRUE,cols = c("#4DBBD5B2", "#DC0000B2","#91D1C2B2"),pt.size=1.2)+DimPlot(sce, group.by = "celltype", label = TRUE,pt.size=1.2)
-FeaturePlot(sce, features = "VG161_transcript", cols = c("lightgrey", "red"),pt.size = 0.05)
+# FeaturePlot(sce, features = "VG161_transcript", cols = c("lightgrey", "red"),pt.size = 1.2)
 dev.off()
 
 
-save(sce,file = "~/rawdata/scRNA_virus/virus_PD1/virus_PD1_anno.RData")
+save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
 
 
 ##### 感染细胞比例 #####
@@ -460,34 +615,36 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_PD1/virus_PD1_anno.RData")
+load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
 table(sce$group)#查看各组细胞数
 prop.table(table(sce$infected))
-table(sce$infected, sce$group)#各组不同细胞群细胞数
+table(sce$infected, sce$orig.ident)#各组不同细胞群细胞数
 
 Cellratio <- prop.table(table(sce$infected, sce$group), margin = 2)#计算各组样本不同细胞群比例
 Cellratio <- as.data.frame(Cellratio)
+Cellratio <- Cellratio[Cellratio$Freq!=0,]
 colourCount = length(unique(Cellratio$Var1))
+colnames(Cellratio) <- c("celltype","group","Freq")
 
 ##柱状图
 library(ggplot2)
 library(ggbreak)
 pdf(paste0(outdir,"/","03-",gene,"-infected_ratio.pdf"),height=8,width=12)
 ggplot(Cellratio) + 
-  geom_bar(aes(x =Var2, y= Freq, fill = Var1),stat = "identity",width = 0.7,size = 0.5,colour = '#222222')+ 
+  geom_bar(aes(x =group, y= Freq, fill = celltype),stat = "identity",width = 0.7,size = 0.5,colour = '#222222')+ 
   theme_classic() +
   labs(x='Sample',y = 'Ratio')+
   coord_flip()+
   theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+
-  geom_text(aes(x = Var2, y = Freq, label = scales::percent(Freq)), 
+  geom_text(aes(x = group, y = Freq/2, label = scales::percent(Freq)), 
             size = 4, colour = "white")+
   scale_fill_manual(values = c("Bystander" = "#4DBBD5B2", "Infected" = "#DC0000B2", "Naive" = "#91D1C2B2"))  # 设置颜色
 
 
-group <- unique(Cellratio$Var2)
-Cellratio_1 <- Cellratio[which(Cellratio$Var2==group[1]),]
+group <- unique(Cellratio$group)
+Cellratio_1 <- Cellratio[which(Cellratio$group==group[1]),]
 Cellratio_1$Freq <- Cellratio_1$Freq*100
-Cellratio_2 <- Cellratio[which(Cellratio$Var2==group[length(group)]),]
+Cellratio_2 <- Cellratio[which(Cellratio$group==group[length(group)]),]
 Cellratio_2$Freq <- Cellratio_2$Freq*100
 top<-function(x){
   return(mean(x)+sd(x)/sqrt(length(x)))
@@ -495,7 +652,7 @@ top<-function(x){
 bottom<-function(x){
   return(mean(x)-sd(x)/sqrt(length(x)))
 }
-p1 <- ggplot(data=Cellratio_1,aes(x=Var1,y=Freq,fill=Var1))+
+p1 <- ggplot(data=Cellratio_1,aes(x=celltype,y=Freq,fill=celltype))+
   stat_summary(geom = "bar",fun = "mean",
                position = position_dodge(0.9))+
   stat_summary(geom = "errorbar",
@@ -507,14 +664,14 @@ p1 <- ggplot(data=Cellratio_1,aes(x=Var1,y=Freq,fill=Var1))+
   theme_bw()+
   theme(panel.grid = element_blank())+
   labs(x="Celltype",y="Proportion(%)")+
-  geom_point(data=Cellratio_1,aes(Var1,Freq),size=3,pch=19)+
+  geom_point(data=Cellratio_1,aes(celltype,Freq),size=3,pch=19)+
   theme(
     axis.text.x.bottom = element_text(size = 14,hjust = 1, vjust = 1, angle = 45)
   ) +ggtitle(group[1])+
   scale_fill_manual(values = c("Bystander" = "#4DBBD5B2", "Infected" = "#DC0000B2", "Naive" = "#91D1C2B2"))  # 设置颜色
   
 
-p2 <- ggplot(data=Cellratio_2,aes(x=Var1,y=Freq,fill=Var1))+
+p2 <- ggplot(data=Cellratio_2,aes(x=celltype,y=Freq,fill=celltype))+
   stat_summary(geom = "bar",fun = "mean",
                position = position_dodge(0.9))+
   stat_summary(geom = "errorbar",
@@ -530,7 +687,7 @@ p2 <- ggplot(data=Cellratio_2,aes(x=Var1,y=Freq,fill=Var1))+
   theme_bw()+
   theme(panel.grid = element_blank())+
   labs(x="Celltype",y="Proportion(%)")+
-  geom_point(data=Cellratio_2,aes(Var1,Freq),size=3,pch=19)+
+  geom_point(data=Cellratio_2,aes(celltype,Freq),size=3,pch=19)+
   ggtitle(group[length(group)])+
   theme(axis.text.x.top = element_blank(),
         axis.line.x.top = element_blank(),
@@ -538,6 +695,7 @@ p2 <- ggplot(data=Cellratio_2,aes(x=Var1,y=Freq,fill=Var1))+
         axis.title.y.right = element_blank(),
         axis.text.y.right = element_blank(),
         axis.ticks.y.right = element_blank())
+
 p1+p2
 dev.off()
 
@@ -566,8 +724,9 @@ library(ggalluvial)
 group <- unique(sce$group)
 sce <- subset(sce,group==group[length(group)])
 #sce <- subset(sce,group=group[1])
+sce <- JoinLayers(sce)
 sce$celltype_new <- ifelse(sce$celltype == "Epithelial", sce$infected, sce$celltype)
-data.input <- GetAssayData(sce, assay = "SCT", slot = "data")
+data.input <- GetAssayData(sce, assay = "RNA", slot = "data")
 identity <- subset(sce@meta.data, select = "celltype_new")
 cellchat <- createCellChat(object = data.input, meta = identity,  group.by = "celltype_new")
 
@@ -661,7 +820,7 @@ for (i in 1:nrow(mat)) {
 }
 ##气泡图
 levels(cellchat@idents)
-netVisual_bubble(cellchat, sources.use = 8, targets.use = c(1:10), remove.isolate = FALSE, thresh = 0.01)
+netVisual_bubble(cellchat, sources.use = c(1,3), targets.use = c(1:6), remove.isolate = FALSE, thresh = 0.01)##要改
 dev.off()
 
 
@@ -670,7 +829,7 @@ pdf(paste0(outdir,"/","05-",gene,"-chat_.pdf"),height=8,width=12)
 cellchat@netP$pathways  #查看都有哪些信号通路
 ##层次图,要找到一个明显的通路先，下面同理
 vertex.receiver = c(2,3,8)
-netVisual_aggregate(cellchat, signaling = "PROS",  vertex.receiver = vertex.receiver,layout="hierarchy")
+netVisual_aggregate(cellchat, signaling = "MK",  vertex.receiver = vertex.receiver,layout="hierarchy")
 ##圈图
 par(mfrow=c(1,1))
 netVisual_aggregate(cellchat, signaling ="MK", layout = "circle")
@@ -678,7 +837,7 @@ netVisual_aggregate(cellchat, signaling ="MK", layout = "circle")
 par(mfrow=c(1,1))
 netVisual_heatmap(cellchat, signaling = "MK", color.heatmap = "Reds")
 #配体-受体层级的可视化
-netAnalysis_contribution(cellchat, signaling = pathways.show)
+netAnalysis_contribution(cellchat, signaling = "MK")
 dev.off()
 
 
@@ -701,9 +860,10 @@ library(ggalluvial)
 
 ##提取表达矩阵和细胞类别创建cellchat对象
 group <- unique(sce$group)
-# sce <- subset(sce,group==group[1])
-sce <- subset(sce,group==group[length(group)])
-data.input <- GetAssayData(sce, assay = "SCT", slot = "data")
+sce <- subset(sce,group==group[1])
+# sce <- subset(sce,group==group[length(group)])
+sce <- JoinLayers(sce)
+data.input <- GetAssayData(sce, assay = "RNA", slot = "data")
 identity <- subset(sce@meta.data, select = "celltype")
 cellchat <- createCellChat(object = data.input, meta = identity,  group.by = "celltype")
 
@@ -747,10 +907,10 @@ cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
 #cellchat <- netEmbedding(cellchat, type = "structural")
 #cellchat <- netClustering(cellchat, type = "structural")
 
-# cellchat_0 <- cellchat
-# save(cellchat_0,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_chat0.rds")
-cellchat_1 <- cellchat
-save(cellchat_1,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_chat1.rds")
+cellchat_0 <- cellchat
+save(cellchat_0,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_chat0.rds")
+# cellchat_1 <- cellchat
+# save(cellchat_1,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_chat1.rds")
 
 
 

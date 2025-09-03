@@ -584,7 +584,7 @@ p1 <- ggplot()+
                    color = 'black',                   
                    scale = 'width') +   
   facet_grid(rows = vars(gene), scales = 'free_y') +   
-  geom_half_violin(data = exprs.melt[exprs.melt$group == 'VG161',],                   
+  geom_half_violin(data = exprs.melt[exprs.melt$group == 'VG161_R',],                   
                    aes(x = celltype_new, y = Expr, fill = group),                   
                    color = 'black',                   
                    scale = 'width',                   

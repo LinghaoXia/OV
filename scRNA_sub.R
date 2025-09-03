@@ -10,9 +10,9 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")
+load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
 sce <- subset(sce,celltype=="Epithelial")
-save(sce,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D_epi.RData")
+save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_epi.RData")
 
 
 
@@ -28,27 +28,29 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_5D/virus_5D_epi.RData")
+load("~/rawdata/scRNA_virus/virus_3D/virus_3D_epi.RData")
 
 table(sce$group)#查看各组细胞数
-prop.table(table(sce$infected))
+prop.table(table(sce$infected, sce$group))
 table(sce$infected, sce$group)#各组不同细胞群细胞数
 
 Cellratio <- prop.table(table(sce$infected, sce$group), margin = 2)#计算各组样本不同细胞群比例
 Cellratio <- as.data.frame(Cellratio)
+Cellratio <- Cellratio[Cellratio$Freq!=0,]
 colourCount = length(unique(Cellratio$Var1))
+colnames(Cellratio) <- c("celltype","group","Freq")
 
 ##柱状图
 library(ggplot2)
 library(ggbreak)
 pdf(paste0(outdir,"/","04-",gene,"-epi_infected.pdf"),height=8,width=12)
 ggplot(Cellratio) + 
-  geom_bar(aes(x =Var2, y= Freq, fill = Var1),stat = "identity",width = 0.7,size = 0.5,colour = '#222222')+ 
+  geom_bar(aes(x =group, y= Freq, fill = celltype),stat = "identity",width = 0.7,size = 0.5,colour = '#222222')+ 
   theme_classic() +
   labs(x='Sample',y = 'Ratio')+
   coord_flip()+
   theme(panel.border = element_rect(fill=NA,color="black", size=0.5, linetype="solid"))+
-  geom_text(aes(x = Var2, y = Freq, label = scales::percent(Freq)), 
+  geom_text(aes(x = group, y = Freq/2, label = scales::percent(Freq)), 
             size = 4, colour = "white")+
   scale_fill_manual(values = c("Bystander" = "#4DBBD5B2", "Infected" = "#DC0000B2", "Naive" = "#91D1C2B2"))  # 设置颜色
 
@@ -56,7 +58,7 @@ ggplot(Cellratio) +
 VlnPlot(sce, features = "VG161",group.by = "group")
 DimPlot(sce, group.by = "infected",split.by = "group", label = TRUE,cols = c("#4DBBD5B2", "#DC0000B2","#91D1C2B2"),pt.size=1.2)
 DimPlot(sce, group.by = "infected",label = TRUE,cols = c("#4DBBD5B2", "#DC0000B2","#91D1C2B2"),pt.size=1.2)+DimPlot(sce, group.by = "celltype", label = TRUE,pt.size=1.2)
-FeaturePlot(sce, features = "VG161_transcript", cols = c("lightgrey", "red"),pt.size = 0.05)
+# FeaturePlot(sce, features = "VG161_transcript", cols = c("lightgrey", "red"),pt.size = 0.05)
 
 dev.off()
 
@@ -79,6 +81,7 @@ library(clusterProfiler)
 library(org.Hs.eg.db)
 
 sce <- subset(sce, group %in% c( "VG161"))
+sce <- JoinLayers(sce)
 
 
 #比较cluster0和cluster1的差异表达基因
@@ -161,6 +164,7 @@ pdf(paste0(outdir,"/","06-",gene,"-epi_GO&KEGG.pdf"),height=20,width=16)
 plotc1
 plotc2
 plotc3
+barplot(ego_BP,showCategory = 30) + ggtitle("barplot for Biological process")
 dev.off()
 
 ###### GSEA #####
@@ -251,4 +255,118 @@ gseap2 <- gseaplot2(kk_gse,
                     ES_geom = "line",#enrichment score用线还是用点"dot"
                     pvalue_table = T) #显示pvalue等信息
 ggsave(gseap2, filename = "GSEA_up_all.pdf",width =12,height =12)
+
+
+##### PPI ####
+library(tidyverse)  # ggplot2 stringer dplyr tidyr readr purrr  tibble forcats
+library(STRINGdb) #BiocManager::install(c("STRINGdb","igraph"),ask = F,update = F)
+library(igraph)
+rm(list=ls())
+gc()
+options(stringsAsFactors = F)
+
+setwd('~/OV/scRNA_virus')
+gene = "scRNA_virus"
+outdir = paste0("~/OV/",gene)
+dir.create("7.PPI")
+setwd("./7.PPI")
+
+
+load("~/rawdata/scRNA_virus/virus_3D/virus_3D_epi.RData")
+DEG_DESeq2 <- read.csv(file = paste0(outdir,"/06-",gene,"-significant_gene.csv"),row.names = 1)
+
+###### 选择STRINGdb类型 #####
+string_db <- STRINGdb$new( version="12.0", #数据库版本。截止2022.5.24最新为11.5
+                           species=9606,   #人9606，小鼠10090 
+                           score_threshold=700, #蛋白互作的得分 默认400, 低150，高700，极高900
+                           input_directory="") #可自己导入数据
+
+###### 获取DEG结果 #####
+##  筛选条件设置 
+log2FC_cutoff = log2(1.5)
+pvalue_cutoff = 0.05
+padj_cutoff = 0.05
+## 选择DEG
+need_deg <- DEG_DESeq2[,c(1,2,5)] ; head(need_deg) 
+colnames(need_deg) <- c('pvalue','log2FC','padj'); head(need_deg)
+need_deg$gene <- rownames(need_deg); head(need_deg)      #gene symbol或ENTREZID都可
+if(T){  
+  gene_up=need_deg[with(need_deg,log2FC>log2FC_cutoff & pvalue<pvalue_cutoff & padj<padj_cutoff),]
+  gene_down=need_deg[with(need_deg,log2FC < -log2FC_cutoff & pvalue<pvalue_cutoff & padj<padj_cutoff),]
+  gene_diff=need_deg[with(need_deg,abs(log2FC)>log2FC_cutoff & pvalue<pvalue_cutoff & padj<padj_cutoff),]
+}
+dim(gene_up);dim(gene_down);dim(gene_diff)
+dat <- gene_diff %>%
+  filter(!is.na(padj), !is.na(pvalue), !is.na(log2FC)) %>%
+  arrange(padj, pvalue, desc(abs(log2FC))) %>%
+  slice_head(n = 200) ##这里选取前100显著基因用于后续分析
+write.table(rownames(dat),'gene_diff100.txt',row.names = F,col.names = F,quote = F) #字符不要带引号
+
+###### 获取STRINGdb ID #####
+dat_map <- string_db$map(my_data_frame=dat, 
+                         my_data_frame_id_col_names="gene", #使用gene symbol或ENTREZID都可
+                         removeUnmappedRows = TRUE )
+hits <- dat_map$STRING_id
+
+###### PPI蛋白互作网络绘制 #####
+png(paste0("07-",gene,"-epi_string_PPI.png"),units="in",width = 10,height = 10, res=400)
+string_db$plot_network(hits)
+dev.off()
+## PPI_halo  #给PPI添加上下调信息
+# filter by p-value and add a color column(i.e.green for down and red for up genes)
+dat_map_color <- string_db$add_diff_exp_color(subset(dat_map, pvalue<0.01),
+                                              logFcColStr="log2FC" )
+payload_id <- string_db$post_payload(dat_map_color$STRING_id,
+                                     colors=dat_map_color$color)
+png(paste0("07-",gene,"-epi_string_PPI_halo.png"),units="in",width = 10,height = 10, res=400)
+string_db$plot_network(hits, payload_id=payload_id )
+dev.off()
+
+##### pathlinkR ####
+library(dplyr)
+library(pathlinkR)
+library(DESeq2) 
+rm(list=ls())
+gc()
+
+setwd('~/rawdata')
+gene = "scRNA_virus"
+outdir = paste0("~/OV/",gene)
+
+load("~/rawdata/scRNA_virus/virus_3D/virus_3D_epi.RData")
+sce <- subset(sce, group %in% c( "VG161"))
+sce$celltype_new <- ifelse (grepl("_1",sce@meta.data$orig.ident),paste0(sce$infected,"_1"),paste0(sce$infected,"_2"))
+sce <- JoinLayers(sce)
+
+bs = split(colnames(sce),sce$infected)
+ct = do.call(
+  cbind,lapply(names(bs), function(x){ 
+    # x=names(bs)[[1]]
+    kp =colnames(sce) %in% bs[[x]]
+    rowSums(as.matrix(sce@assays$RNA$counts[, kp]  ))
+  })
+)
+ct <- as.data.frame(ct)
+phe = unique(sce@meta.data[,c('infected','infected')])
+group_list = phe[match(names(bs),phe$infected),'infected']
+table(group_list)    
+exprSet = ct
+exprSet[1:4,1:4] 
+dim(exprSet) 
+exprSet=exprSet[apply(exprSet,1, function(x) sum(x>1) > 1),]
+dim(exprSet)  
+table(group_list)
+
+colData <- data.frame(row.names=colnames(ct),group_list=group_list)
+dds <- DESeqDataSetFromMatrix(countData = exprSet,colData = colData,design = ~ group_list)
+dds2 <- DESeq(dds)
+table(group_list)
+tmp <- results(dds2,contrast=c("group_list","Infected","Bystander"))
+
+eruption(
+  rnaseqResult=tmp[],
+  title="X"
+)
+
+
 
