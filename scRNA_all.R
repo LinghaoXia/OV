@@ -821,6 +821,10 @@ for (i in 1:nrow(mat)) {
 ##气泡图
 levels(cellchat@idents)
 netVisual_bubble(cellchat, sources.use = c(1,3), targets.use = c(1:6), remove.isolate = FALSE, thresh = 0.01)##要改
+#识别细胞的信号流模式
+ht1 <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "outgoing", font.size = 5)
+ht2 <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "incoming", font.size = 5)
+ht1 + ht2
 dev.off()
 
 

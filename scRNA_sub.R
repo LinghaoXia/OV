@@ -85,8 +85,83 @@ sce <- JoinLayers(sce)
 
 
 #比较cluster0和cluster1的差异表达基因
-dge.cluster <- FindMarkers(sce,ident.1 = "Bystander",ident.2 = "Infected",group.by = 'infected')
+dge.cluster <- FindMarkers(sce,ident.1 = "Infected",ident.2 = "Bystander",group.by = 'infected') #ident1是测试组
 write.csv(dge.cluster, file = paste0(outdir,"/06-",gene,"-significant_gene.csv"), row.names = T)
+
+
+
+###### 单组火山图 ######
+library(ggplot2)
+library(dplyr) # 用于数据处理
+library(gt) # 制作表格
+library(ggrepel)
+library(openxlsx)
+
+results <- read.csv(file = paste0(outdir,"/06-",gene,"-significant_gene.csv"),row.names = 1)
+results <- results[,c(1,2,5)]
+colnames(results) <- c("pvalue","logFC","adj.P.Val")
+
+# 计算显著性
+cut_off_FDR =0.05 #设置FDR的阈值
+cut_off_log2FC =log2(1.5) #设置log2FC的阈值
+results$Sig = ifelse(results$adj.P.Val < cut_off_FDR &    #根据阈值筛选差异显著的上下调基因，与差异不显著的基因
+                       abs(results$logFC) >= cut_off_log2FC,  #abs绝对值
+                     ifelse(results$logFC > cut_off_log2FC ,'Up','Down'),'no')
+results = data.frame(results)
+results$gene_name <- row.names(results)
+
+
+#数据预处理——将上下调基因分开绘制各自的标签框类型#
+Up_top_10 =(     #筛选差异显著上调的前10个Gene
+  results %>%
+    filter(Sig == 'Up') %>%
+    filter(!grepl('VG161', gene_name)) %>%
+    arrange(adj.P.Val, desc(abs(logFC))) %>%
+    head(10)
+)
+Up_top_10 %>% gt() #数据制成表
+Down_top_10 = (       #筛选差异显著下调的前10个Gene
+  results %>%
+    filter(Sig == 'Down') %>%
+    filter(!grepl('VG161', gene_name)) %>%
+    arrange(adj.P.Val, desc(abs(logFC))) %>%
+    head(10)
+)
+
+# Down_top_10= (       #筛选差异显著下调的前10个Gene
+#   results %>%
+#     filter(gene_name %in% c("Cd274","L2hgdh")) %>%
+#     arrange(adj.P.Val, desc(abs(logFC)))
+# )
+Down_top_10 %>% gt() #数据制成表
+
+
+pdf(paste0(outdir,"/","06-",gene,"-epi_DEG.pdf"),width = 8,height = 10)
+
+ggplot(results, aes(x =logFC, y= -log10(adj.P.Val), colour=Sig)) + #x、y轴取值限制，颜色根据"Sig"
+  geom_point(alpha=0.65, size=2) +  #点的透明度、大小
+  scale_color_manual(values=c("#546de5", "#d2dae2","#ff4757")) + xlim(c(-2, 2)) +  #调整点的颜色和x轴的取值范围
+  geom_vline(xintercept=c(-cut_off_log2FC,cut_off_log2FC),lty=4,col="black",lwd=0.8) + #添加x轴辅助线,lty函数调整线的类型："twodash"、"longdash"、"dotdash"、"dotted"、"dashed"、"solid"、"blank"
+  geom_hline(yintercept = -log10(cut_off_FDR), lty=4,col="black",lwd=0.8) +  #添加y轴辅助线
+  labs(x="log2FC", y="-log10FDR") +  #x、y轴标签
+  ggtitle("IFN-y") + #标题
+  theme_bw() + # 主题，help(theme)查找其他个性化设置
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position="right", 
+        legend.title = element_blank()
+  )+geom_label_repel(data = Up_top_10,
+                     aes(logFC, -log10(adj.P.Val), label = gene_name),
+                     size = 3, fill="#CCFFFF",
+                     alpha = 0.65, color = "black")+
+  geom_label_repel(data = Down_top_10,
+                   aes(logFC, -log10(adj.P.Val), label = gene_name),
+                   size = 3, fill="#FFCCCC",
+                   alpha = 0.65, color = "black")+
+  ylim(0, 300)  # 设置y轴的范围
+
+
+
+dev.off()
 
 
 ###### KEGG&GO ######
@@ -101,7 +176,7 @@ ego_ALL <- enrichGO(gene          = row.names(sig_dge.cluster),
                     pvalueCutoff  = 0.01,
                     qvalueCutoff  = 0.05)
 write.csv(ego_ALL,file = paste0(outdir,"/06-",gene,"-GO.csv"), quote=F, row.names = F)
-plotc3 <- barplot(ego_ALL, x = "GeneRatio", color = "p.adjust", #默认参数（x和color可以根据eG里面的内容更改）
+plotc3 <- barplot(ego_ALL, x = "GeneRatio", color = "p.adjust",font.size = 15, #默认参数（x和color可以根据eG里面的内容更改）
                   showCategory =10, #只显示前10
                   split="ONTOLOGY") + #以ONTOLOGY类型分开
   facet_grid(ONTOLOGY~., scale='free') #以ONTOLOGY类型分开绘图
@@ -133,9 +208,9 @@ ego_BP <- enrichGO(gene          = row.names(sig_dge.cluster),
 ego_CC@result$Description <- substring(ego_CC@result$Description,1,100)
 ego_MF@result$Description <- substring(ego_MF@result$Description,1,100)
 ego_BP@result$Description <- substring(ego_BP@result$Description,1,100)
-p_BP <- barplot(ego_BP,showCategory = 10) + ggtitle("barplot for Biological process")
-p_CC <- barplot(ego_CC,showCategory = 10) + ggtitle("barplot for Cellular component")
-p_MF <- barplot(ego_MF,showCategory = 10) + ggtitle("barplot for Molecular function")
+p_BP <- barplot(ego_BP,showCategory = 10,font.size = 15) + ggtitle("barplot for Biological process")
+p_CC <- barplot(ego_CC,showCategory = 10,font.size = 15) + ggtitle("barplot for Cellular component")
+p_MF <- barplot(ego_MF,showCategory = 10,font.size = 15) + ggtitle("barplot for Molecular function")
 plotc1 <- p_BP/p_MF/p_CC
 
 #KEGG GeneRatio表示差异基因所占比例
@@ -156,15 +231,24 @@ ekegg_df$SYMBOL <- lapply(strsplit(ekegg_df$geneID, "/"), function(entrez_ids) {
 ekegg_df$SYMBOL <- sapply(ekegg_df$SYMBOL, paste, collapse = "/")
 write.csv(ekegg_df,file = paste0(outdir,"/06-",gene,"-KEGG.csv"),  quote=F, row.names = F)
 
-p1 <- barplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str_wrap(x, width = 35))+ggtitle("KEGG")
-p2 <- dotplot(ekegg, showCategory=10)+ scale_y_discrete(labels = function(x) str_wrap(x, width = 35))+ggtitle("KEGG")
+p1 <- barplot(ekegg, showCategory=10,font.size = 15)+ scale_y_discrete(labels = function(x) str_wrap(x, width = 35))+ggtitle("KEGG")
+p2 <- dotplot(ekegg, showCategory=10,font.size = 15)+ scale_y_discrete(labels = function(x) str_wrap(x, width = 35))+ggtitle("KEGG")
 plotc2 = p1/p2
 
-pdf(paste0(outdir,"/","06-",gene,"-epi_GO&KEGG.pdf"),height=20,width=16)
+genelist <- dge.cluster$avg_log2FC
+names(genelist) <- rownames(dge.cluster)
+ego <- setReadable(ego_BP, 'org.Hs.eg.db', 'SYMBOL')
+
+pdf(paste0(outdir,"/","06-",gene,"-epi_GO&KEGG.pdf"),height=20,width=20)
 plotc1
 plotc2
 plotc3
-barplot(ego_BP,showCategory = 30) + ggtitle("barplot for Biological process")
+barplot(ego_BP,showCategory = 15,font.size = 30) + ggtitle("barplot for Biological process")+
+  theme(plot.title = element_text(size = 30, face = "bold"),
+        legend.text = element_text(size = 20),       # 图例文字大小
+        legend.title = element_text(size = 22, face = "bold") # 图例标题大小（可选）
+        )
+cnetplot(ego,color_edge = 'category',foldChange=genelist,showCategory = c("leukocyte migration","leukocyte cell-cell adhesion","regulation of T cell activation"))#igraph::layout_in_circle
 dev.off()
 
 ###### GSEA #####
@@ -219,17 +303,23 @@ kk_gse <- GO_kk
 kk_gse_entrez <- GO_kk_entrez
 
 ###单独的gseaplot
-terms <- c("GO:1905517","GO:0071674")
+terms <- c("GO:0050900","GO:0050863")
 
 gseaplot_list <- lapply(terms, function(x){
-  gseaNb(object = kk_gse_entrez,
+  gseaNb(object = kk_gse,
          geneSetID = x,
          termWidth = 30,
          addPval = T,
          pvalX = 0.75,
-         pvalY = 0.6
+         pvalY = 0.6,
+         addGene = "MDK",
+         geneCol= '#4d4d4d',
+         kegg = T
   )
 })
+# addGene= T, #是否添加基因
+# markTopgene= T, #是否标注Top基因
+# topGeneN= 25, #标注前多少个gene
 
 pdf(paste0(outdir,"/","06-",gene,"-epi_GSEA.pdf"),height=10,width=16)
 cowplot::plot_grid(plotlist=gseaplot_list, ncol = 2)
