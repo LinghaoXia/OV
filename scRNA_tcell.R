@@ -23,35 +23,97 @@ load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
 ###提取亚群
 sce <- subset(sce, celltype=="Tcell")
 
-
-###降维
-sce <- SCTransform(sce,vst.flavor = "v2", verbose = FALSE, method = "glmGamPoi",vars.to.regress = "percent.mt")
-sce=RunPCA(sce,assay="SCT",verbose = FALSE)
-##去批次
-sce=RunHarmony(sce,group.by.vars="orig.ident",assay.use="SCT", plot_convergence = TRUE,max.iter.harmony =50 )
-##最佳PC数量
-pct <- sce [["harmony"]]@stdev / sum( sce [["harmony"]]@stdev) * 100
+###### NormalizeData ######
+sce <- NormalizeData(sce, normalization.method = "LogNormalize", scale.factor = 1e4)  #对数据进行标准化
+sce <- FindVariableFeatures(sce, selection.method = 'vst', nfeatures = 2000) #寻找高变基因
+# 找出前10高可变基因用于后续可视化
+top10 <- head(VariableFeatures(sce), 10)
+# 高变基因可视化
+plot1 <- VariableFeaturePlot(sce)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot2
+# PCA前的scale和PCA
+all.genes <- rownames(sce)
+sce <- ScaleData(sce, features = all.genes)
+sce <- ScaleData(sce, vars.to.regress = "percent.mt")
+sce <- RunPCA(sce, features = VariableFeatures(object = sce)) #默认最大PC数为50，可查阅函数help自行修改参数
+# 线性降维（PCA），默认用高变基因集，但也可通过features参数自己指定；
+sce <- RunPCA(sce,features=VariableFeatures(object=sce))
+# 检查PCA分群结果，这里只展示前12个PC，每个PC只显示3个基因；
+print(sce[["pca"]],dims=1:12,nfeatures = 3)
+# # 方法1：Jackstraw置换检验算法：重复取样（原数据的1%），重跑PCA，鉴定p-value较小的PC；计算’null distribution‘（即零假设成立时）时的基因scores；
+# sce <- JackStraw(sce,num.replicate = 100)
+# sce <- ScoreJackStraw(sce,dims=1:20)
+# JackStrawPlot(sce,dims=1:30)
+# # 方法2：肘部图（碎石图），基于每个主成分对方差解释率的排名；
+# ElbowPlot(sce)
+# 方法3：生信技能树
+pct <- sce [["pca"]]@stdev / sum( sce [["pca"]]@stdev) * 100
 cumu <- cumsum(pct)
 co1 <- which(cumu > 90 & pct < 5)[1]
 co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
 pcs <- min(co1, co2)
-#获取了最佳PC用于UMAP和FindNeighbors
-bestpc=1:pcs
-sce<- sce %>% RunUMAP(reduction = "harmony", dims = bestpc) %>% 
-  FindNeighbors(reduction = "harmony", dims = bestpc)
-sce=FindClusters(sce,resolution = 0.2)#需要对粒度进行调整
+plot_df <- data.frame(pct = pct,   cumu = cumu,   rank = 1:length(pct))
+ggplot(plot_df, aes(cumu, pct, label = rank, color = rank > pcs)) + 
+  geom_text() + 
+  geom_vline(xintercept = 90, color = "grey") + 
+  geom_hline(yintercept = min(pct[pct > 5]), color = "grey") +
+  theme_bw()
+# 基于PCA空间中的欧式距离计算nearest neighbor graph，优化任意两个细胞间的距离权重（输入上一步得到的PC维数）；
+sce <- FindNeighbors(sce, dims = 1:16) # 前10个PC
+# 用umap的方法，并可视化
+sce <- RunUMAP(sce, dims = 1:16)
+# 用tsne的方法，并可视化
+sce <- RunTSNE(sce,dims=1:16)
+
+###### 合适的分辨率 ######
+#接着优化模型，resolution参数决定下游聚类分析得到的分群数，对于3k左右的细胞，设为0.4-1.2能得到较好的结果（官方说明）；如果数据量增大，该参数也应该适当增大；
+library(clustree)
+library(patchwork)
+library(cluster)
+sce <- FindClusters(sce, resolution = c(seq(.1,1.5,.1))) # 多个分辨率
+clustree(sce, prefix = 'RNA_snn_res.') + coord_flip()
+clustree_plt <- clustree(sce, prefix = 'RNA_snn_res.')
+cell_dists <- dist(sce@reductions$pca@cell.embeddings,method = "euclidean")
+head(cell_dists)
+cluster_info <- sce@meta.data[,grepl(paste0(DefaultAssay(sce),"_snn_res"),
+                                     colnames(sce@meta.data))] %>%
+  dplyr::mutate_all(as.character) %>%
+  dplyr::mutate_all(as.numeric)
+head(cluster_info)[,1:8]
+si= silhouette(cluster_info[,1], cell_dists) %>%head()
+si
+silhouette_res <- apply(cluster_info, 2, function(x){
+  si <- silhouette(x, cell_dists)
+  if(!any(is.na(si))) {
+    mean(si[, 'sil_width'])
+  } else {
+    NA
+  }
+})
+silhouette_res#峰顶最优
+sce[["opt_clust_integrated"]] <- sce[["RNA_snn_res.0.8"]] #"RNA_snn_res.0.6"#names(which.max(silhouette_res))
+Idents(sce) = "opt_clust_integrated"
+# 去除多余分辨率
+spam_cols <- grepl(paste0(DefaultAssay(sce), "_snn_res"),
+                   colnames(sce@meta.data)) |
+  grepl("seurat_clusters",colnames(sce@meta.data))
+sce@meta.data <- sce@meta.data[,!spam_cols]
 save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_tcell.RData")
 
 pdf(paste0(outdir,"/","08-",gene,"-tcell.pdf"),height=10,width=6)
-DimPlot(sce, reduction = 'umap', group.by = 'seurat_clusters',label = TRUE, pt.size = 0.5)
+DimPlot(sce, reduction = 'umap', group.by = 'opt_clust_integrated',label = TRUE, pt.size = 0.5)
 dev.off()
 
 
 ##### T细胞亚群注释 #####
+trace(scRNAtoolVis:::jjDotPlot, edit = T)
 library(Seurat) 
 library(ggplot2)
 library(dplyr)
 library(scRNAtoolVis)
+library(ggdendro)
+library(legendry)
 rm(list=ls())
 gc()
 
@@ -77,13 +139,21 @@ markers_plot <- data.frame(cluster = c(rep("CD4 Tcell",1),
                            gene = markers)
 
 pdf(paste0(outdir,"/","08-",gene,"-Tcell_markers.pdf"),height=10,width=6)
-jjDotPlot(object = sce,          
-          markerGene = markers_plot,          
-          anno = T,          
-          id = 'seurat_clusters',          
-          textSize = 10,          
-          base_size= 10,          
-          plot.margin = c(4,1.5,1.5,1.5))
+CellDimPlot(
+  srt = sce, group.by = c("opt_clust_integrated"),
+  reduction = "UMAP", theme_use = "theme_blank"
+)
+scRNAtoolVis::jjDotPlot(object = sce,          
+                        markerGene = markers_plot,   
+                        anno = TRUE,
+                        id = 'opt_clust_integrated', 
+                        ytree=T,
+                        tree.pos = 'right',
+                        textSize = 15,          
+                        base_size= 15,          
+                        plot.margin = c(8,1,3,1))
+FeaturePlot(sce,features = markers,cols = c("lightgrey" ,"red"),
+            combine = TRUE,raster=FALSE)
 dev.off()
 
 

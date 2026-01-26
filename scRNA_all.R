@@ -30,7 +30,7 @@ save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D.RData")
 
 ##virus_5D
 setwd('~/rawdata/scRNA_virus/virus_5D')
-folders=list.files('./')
+folders<- Filter(dir.exists, list.files(".", full.names = F))
 folders
 library(Seurat)
 scList = lapply(folders,function(folder){ 
@@ -390,6 +390,7 @@ gc()
 setwd('~/rawdata')
 gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
+source("~/code/new_function.R")
 
 
 load("~/rawdata/scRNA_virus/virus_3D/virus_3D_cluster.RData")
