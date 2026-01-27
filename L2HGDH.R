@@ -455,3 +455,154 @@ ggplot(results, aes(x =logFC, y= -log10(P.Value), colour=Significance)) + #x、y
   coord_cartesian(ylim = c(1, max(-log10(results$P.Value), na.rm = TRUE))) # 设置y轴的范围
 
 dev.off()
+
+
+##### 转录组 #####
+library(tidyverse)
+library(patchwork)
+library(dplyr)
+library(ggplot2)
+library(limma)
+library(pheatmap)
+library(DESeq2)
+library("BiocParallel") #启用多核计算
+
+rm(list=ls())
+gc()
+getwd()
+setwd('~/rawdata')
+gene = "L2HGDH"
+outdir = paste0("~/OV/",gene)
+
+##设定 实验组exp / 对照组ctr
+exp="SH1"
+ctr="CTRL"
+
+data_tpm <- as.matrix(read.csv("~/rawdata/L2HGDH_rnaseq/counts.csv", row.names = 1))
+
+sample_info <- data.frame(
+  group = factor(c(rep("CTRL", 3), rep("SH1", 3)))
+)
+
+##构建dds DESeqDataSet
+if(T){
+  dds <- DESeqDataSetFromMatrix(countData = data_tpm,
+                                colData = sample_info,
+                                design = ~ group)
+}
+if(F){  #若上游为salmon
+  dds <- DESeqDataSetFromTximport(txi, 
+                                  colData = sample_info,
+                                  design = ~ group)
+}
+
+
+dds$group <- relevel(dds$group, ref = ctr)   #指定 control group
+
+keep <- rowSums(counts(dds) > 0) >= 2  #Pre-filtering ，过滤低表达基因
+dds <- dds[keep,] 
+dds <- DESeq(dds,quiet = F) 
+res <- results(dds,contrast=c("group", exp, ctr))  #指定提取为exp/ctr结果
+resOrdered <- res[order(res$padj),]  #order根据padj从小到大排序结果
+tempDEG <- as.data.frame(resOrdered)
+DEG_DEseq2 <- na.omit(tempDEG)
+
+write.csv(DEG_DEseq2, file = paste0(outdir,"/",gene,"-significant_gene.csv"), row.names = T)
+
+###### GSEA #####
+library(org.Hs.eg.db)
+library(clusterProfiler)
+library(enrichplot)
+library(tidyverse)
+library(ggstatsplot)
+library(GseaVis)
+rm(list=ls())
+gc()
+
+getwd()
+setwd('~/rawdata')
+gene = "L2HGDH"
+outdir = paste0("~/OV/",gene)
+
+sig_dge <- read.csv(file =paste0(outdir,"/",gene,"-significant_gene.csv"))
+row.names(sig_dge) <- sig_dge[,1]
+sig_dge <- sig_dge[,c(3,6)] #选择log2FoldChange和pvalue（凑成数据框）
+colnames(sig_dge) <- c('log2FoldChange','pvalue')
+sig_dge$SYMBOL <- rownames(sig_dge)
+
+###创建gsea分析的geneList（包含从大到小排列的log2FoldChange和ENTREZID信息）
+df <- bitr(rownames(sig_dge), 
+           fromType = "SYMBOL",
+           toType =  "ENTREZID",
+           OrgDb = "org.Mm.eg.db") #人数据库org.Hs.eg.db 小鼠org.Mm.eg.db
+sig_dge <- merge(sig_dge, df, by='SYMBOL')  #按照SYMBOL合并注释信息
+
+geneList <- sig_dge$log2FoldChange
+names(geneList) <- sig_dge$ENTREZID
+geneList <- sort(geneList, decreasing = T)   #从大到小排序
+
+###gsea富集
+options(timeout = 120)  # 设置超时时间为 120 秒
+KEGG_kk_entrez <- gseKEGG(geneList     = geneList,
+                          organism     = "mmu", #人hsa 鼠mmu
+                          pvalueCutoff = 0.05)  #实际为padj阈值,可调整 
+KEGG_kk <- DOSE::setReadable(KEGG_kk_entrez, 
+                             OrgDb="org.Mm.eg.db",
+                             keyType='ENTREZID')#转化id             
+
+GO_kk_entrez <- gseGO(geneList     = geneList,
+                      ont          = "ALL",  # "BP"、"MF"和"CC"或"ALL"
+                      OrgDb        = "org.Mm.eg.db",#人类org.Hs.eg.db 鼠org.Mm.eg.db
+                      keyType      = "ENTREZID",
+                      pvalueCutoff = 0.25)   #实际为padj阈值可调整
+GO_kk <- DOSE::setReadable(GO_kk_entrez, 
+                           OrgDb= "org.Mm.eg.db",
+                           keyType='ENTREZID')#转化id 
+
+###选取富集结果
+kk_gse <- GO_kk
+kk_gse_entrez <- GO_kk_entrez
+
+###单独的gseaplot
+terms <- c("GO:0002703","GO:0002443","GO:0002252")  
+
+gseaplot_list <- lapply(terms, function(x){
+  gseaNb(object = kk_gse,
+         geneSetID = x,
+         termWidth = 30,
+         addPval = T,
+         pvalX = 0.75,
+         pvalY = 0.6,
+         addGene = "Cd274",
+         geneCol= '#4d4d4d',
+         kegg = T
+  )
+})
+# addGene= T, #是否添加基因
+# markTopgene= T, #是否标注Top基因
+# topGeneN= 25, #标注前多少个gene
+
+pdf(paste0(outdir,"/",gene,"-epi_GSEA.pdf"),height=10,width=16)
+cowplot::plot_grid(plotlist=gseaplot_list, ncol = 3)
+dev.off()
+
+###合并的gseaplot（未改）
+#一般认为|NES|>1，NOM pvalue<0.05，FDR（padj）<0.25的通路是显著富集的
+kk_gse_cut <- kk_gse[kk_gse$pvalue<0.05 & kk_gse$p.adjust<0.25 & abs(kk_gse$NES)>1]
+kk_gse_cut_down <- kk_gse_cut[kk_gse_cut$NES < 0,]
+kk_gse_cut_up <- kk_gse_cut[kk_gse_cut$NES > 0,]
+#选择展现NES前几个通路 
+down_gsea <- kk_gse_cut_down[tail(order(kk_gse_cut_down$NES,decreasing = T),10),]
+up_gsea <- kk_gse_cut_up[head(order(kk_gse_cut_up$NES,decreasing = T),10),]
+diff_gsea <- kk_gse_cut[head(order(abs(kk_gse_cut$NES),decreasing = T),10),]
+# 合并 GSEA通路 
+gseap2 <- gseaplot2(kk_gse,
+                    up_gsea$ID,#富集的ID编号
+                    title = "UP_GSEA_all",#标题
+                    color = "red",#GSEA线条颜色
+                    base_size = 20,#基础字体大小
+                    rel_heights = c(1.5, 0.5, 1),#副图的相对高度
+                    subplots = 1:3, #要显示哪些副图 如subplots=c(1,3) #只要第一和第三个图
+                    ES_geom = "line",#enrichment score用线还是用点"dot"
+                    pvalue_table = T) #显示pvalue等信息
+ggsave(gseap2, filename = "GSEA_up_all.pdf",width =12,height =12)
