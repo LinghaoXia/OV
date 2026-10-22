@@ -39,12 +39,12 @@ scList = lapply(folders,function(folder){
                      min.cells = 3, min.features = 200)
 })
 
-virus_5D <- merge(scList[[1]], 
+sce <- merge(scList[[1]], 
                   y = c(scList[[2]],scList[[3]],scList[[4]],scList[[5]],scList[[6]]),
                   add.cell.ids = c("Vehicle_5D_1","Vehicle_5D_2","VG161_5D_L1","VG161_5D_L2","VG161_5D_R1","VG161_5D_R2"), 
                   project = "virus_5D")
 
-save(virus_5D,file="virus_5D.RDS")
+save(sce,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D.RData")
 
 ##virus_PD1
 setwd('~/rawdata/scRNA_virus/virus_PD1')
@@ -85,7 +85,7 @@ setwd('~/rawdata')
 gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 ##virus_3D
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D.RData")
 sce[["percent.mt"]] <- PercentageFeatureSet(sce, pattern = "^MT-")
 preQC <- VlnPlot(sce, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3,
                  group.by = "orig.ident", 
@@ -133,7 +133,7 @@ pct <- sce [["pca"]]@stdev / sum( sce [["pca"]]@stdev) * 100
 cumu <- cumsum(pct)
 co1 <- which(cumu > 90 & pct < 5)[1]
 co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
-pcs <- min(co1, co2)
+pcs <- min(co1, co2)#下游维度
 plot_df <- data.frame(pct = pct,   cumu = cumu,   rank = 1:length(pct))
 ggplot(plot_df, aes(cumu, pct, label = rank, color = rank > pcs)) + 
   geom_text() + 
@@ -141,11 +141,11 @@ ggplot(plot_df, aes(cumu, pct, label = rank, color = rank > pcs)) +
   geom_hline(yintercept = min(pct[pct > 5]), color = "grey") +
   theme_bw()
 # 基于PCA空间中的欧式距离计算nearest neighbor graph，优化任意两个细胞间的距离权重（输入上一步得到的PC维数）；
-sce <- FindNeighbors(sce, dims = 1:13) # 前10个PC
+sce <- FindNeighbors(sce, dims = 1:15) # 前10个PC
 # 用umap的方法，并可视化
-sce <- RunUMAP(sce, dims = 1:13)
+sce <- RunUMAP(sce, dims = 1:15)
 # 用tsne的方法，并可视化
-sce <- RunTSNE(sce,dims=1:13)
+sce <- RunTSNE(sce,dims=1:15)
 
 ###### 合适的分辨率 ######
 #接着优化模型，resolution参数决定下游聚类分析得到的分群数，对于3k左右的细胞，设为0.4-1.2能得到较好的结果（官方说明）；如果数据量增大，该参数也应该适当增大；
@@ -207,8 +207,8 @@ sce=FindClusters(sce,resolution = 0.5)#需要对粒度进行调整
 
 ###### 可视化 ######
 #保存结果
-sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),'VG161','Vehicle')
-# #sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),ifelse(grepl("_L",sce@meta.data$orig.ident),"VG161_L","VG161_R"),'Vehicle')
+# sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),'VG161','Vehicle')
+sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),ifelse(grepl("_L",sce@meta.data$orig.ident),"VG161_L","VG161_R"),'Vehicle')
 # sce@meta.data$group <- ifelse (grepl("VG161",sce@meta.data$orig.ident),ifelse(grepl("_L",sce@meta.data$orig.ident),"PD1_VG161_L","PD1_VG161_R"),'PD1')
 
 pdf(paste0(outdir,"/","01-",gene,"-cluster_sample.pdf"),height=10,width=6)
@@ -219,7 +219,7 @@ pdf(paste0(outdir,"/","01-",gene,"-cluster.pdf"),height=10,width=6)
 DimPlot(sce, reduction = "umap",label = TRUE,repel = T, pt.size = .1)
 dev.off()
 
-save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_cluster.RData")
+save(sce,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D_cluster.RData")
 
 ##### 自动注释-singleR #####
 library(SingleR)
@@ -376,7 +376,6 @@ dev.off()
 save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
 
 ##### 手动细胞亚群注释 #####
-trace(scRNAtoolVis:::jjDotPlot, edit = T)
 library(Seurat) 
 library(ggplot2)
 library(dplyr)
@@ -393,7 +392,7 @@ outdir = paste0("~/OV/",gene)
 source("~/code/new_function.R")
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_cluster.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_cluster.RData")
 
 ###### genes to check ######
 markers <- c("EPCAM","CDH1","KRT19",  #Epithelial         
@@ -415,7 +414,7 @@ markers_plot <- data.frame(cluster = c(rep("Epithelial",3),
                            gene = markers)
 # sce_X <- subset(sce,idents=c(0,1,2,4))
 pdf(paste0(outdir,"/","02-",gene,"-markers.pdf"),height=15,width=10)
-scRNAtoolVis::jjDotPlot(object = sce,          
+jjDotPlot(object = sce,          
           markerGene = markers_plot,   
           anno = TRUE,
           id = 'opt_clust_integrated', 
@@ -429,12 +428,12 @@ dev.off()
 
 ###### annotation ######
 groups <- list(
-  Epithelial = c("1","2","3","4","6","7","8","9","11","13","14","18","20","24"),
-  Myeloid    = c("21","0","22"),
-  Tcell      = c("16","10","15"),
-  Fibroblast = c("12","19"),
-  Mast       = c("23"),
-  Other      = c("5","17")
+  Epithelial = c("13","10","7","4","6","3","12","1"),
+  Myeloid    = c("0","9"),
+  Tcell      = c("8"),
+  Fibroblast = c("16","11","15","18","19","14","21","5","2"),
+  Mast       = c("20"),
+  Other      = c("17")
 )
 
 celltype <- unlist(lapply(names(groups), function(g) setNames(rep(g, length(groups[[g]])), groups[[g]])))
@@ -451,7 +450,7 @@ DimPlot(sce, reduction = "umap",
         group.by = "celltype",
         label = TRUE, label.size = 5, repel = TRUE)
 dev.off()
-save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
+save(sce,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")
 
 
 ##### 细胞比例 #####
@@ -466,7 +465,7 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")
 table(sce$group)#查看各组细胞数
 prop.table(table(sce$celltype))
 table(sce$group)#各组不同细胞群细胞数
@@ -541,7 +540,7 @@ setwd('~/rawdata')
 gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")
 # ##病毒早期基因比例
 # early_viral_genes <- c("VG161-UL4","VG161-UL5","VG161-UL8","VG161-UL11","VG161-UL12","VG161-UL13","VG161-UL14",
 #                        "VG161-UL22","VG161-UL23","VG161-UL29",
@@ -587,6 +586,7 @@ sce[["VG161"]] <- PercentageFeatureSet(sce,pattern = "^VG161-UL|^VG161-ICP|^VG16
 VlnPlot(sce, features = "VG161",group.by = "celltype",y.max = 0.18)
 # features <- viral_genes[grepl("^VG161-(UL|ICP|US|IRL)", viral_genes) & !grepl("^VG161-UL(36|24)\\b", viral_genes)]
 # sce[["VG161"]] <- PercentageFeatureSet(sce,features = features)
+# sce[["VG161"]] <- PercentageFeatureSet(sce,pattern = "^VG161-")
 VlnPlot(sce, features = "VG161",group.by = "group")
 # x <- FetchData(object = sce, vars = c("group",viral_genes))
 
@@ -601,7 +601,7 @@ DimPlot(sce, group.by = "infected",label = TRUE,cols = c("#4DBBD5B2", "#DC0000B2
 dev.off()
 
 
-save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
+save(sce,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")
 
 
 ##### 感染细胞比例 #####
@@ -616,7 +616,7 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")
 table(sce$group)#查看各组细胞数
 prop.table(table(sce$infected))
 table(sce$infected, sce$orig.ident)#各组不同细胞群细胞数
@@ -717,9 +717,11 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")
 library(CellChat)
 library(ggalluvial)
+library(uwot)
+
 
 ##提取表达矩阵和细胞类别创建cellchat对象
 group <- unique(sce$group)
@@ -727,7 +729,7 @@ sce <- subset(sce,group==group[length(group)])
 #sce <- subset(sce,group=group[1])
 sce <- JoinLayers(sce)
 sce$celltype_new <- ifelse(sce$celltype == "Epithelial", sce$infected, sce$celltype)
-data.input <- GetAssayData(sce, assay = "RNA", slot = "data")
+data.input <- GetAssayData(sce, assay = "RNA", layer = "data")
 identity <- subset(sce@meta.data, select = "celltype_new")
 cellchat <- createCellChat(object = data.input, meta = identity,  group.by = "celltype_new")
 
@@ -764,14 +766,15 @@ cellchat <- computeCommunProbPathway(cellchat)
 cellchat <- aggregateNet(cellchat)
 
 cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
-#cellchat <- computeNetSimilarity(cellchat, type = "functional")
-#cellchat <- netEmbedding(cellchat, type = "functional")
-#cellchat <- netClustering(cellchat, type = "functional")
-#cellchat <- computeNetSimilarity(cellchat, type = "structural")
-#cellchat <- netEmbedding(cellchat, type = "structural")
-#cellchat <- netClustering(cellchat, type = "structural")
 
-save(cellchat,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_chat.rds")
+cellchat <- computeNetSimilarity(cellchat, type = "functional")
+cellchat <- netEmbedding(cellchat, umap.method = 'uwot',type = "functional")
+cellchat <- netClustering(cellchat, type = "functional",do.parallel = FALSE)
+cellchat <- computeNetSimilarity(cellchat, type = "structural")
+cellchat <- netEmbedding(cellchat,umap.method = 'uwot', type = "structural")
+cellchat <- netClustering(cellchat, type = "structural",do.parallel = FALSE)
+
+save(cellchat,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D_chat.rds")
 
 
 
@@ -788,7 +791,7 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_chat.rds")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_chat.rds")
 library(CellChat)
 library(ggalluvial)
 
@@ -826,6 +829,11 @@ netVisual_bubble(cellchat, sources.use = c(1,3), targets.use = c(1:6), remove.is
 ht1 <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "outgoing", font.size = 5)
 ht2 <- netAnalysis_signalingRole_heatmap(cellchat, pattern = "incoming", font.size = 5)
 ht1 + ht2
+
+
+netVisual_embedding(cellchat, type = "functional", label.size = 3.5)
+netVisual_embeddingZoomIn(cellchat, type = "functional", nCol = 2)
+netVisual_embedding(cellchat, type = "structural", label.size = 3.5)
 dev.off()
 
 
@@ -833,7 +841,7 @@ dev.off()
 pdf(paste0(outdir,"/","05-",gene,"-chat_.pdf"),height=8,width=12)
 cellchat@netP$pathways  #查看都有哪些信号通路
 ##层次图,要找到一个明显的通路先，下面同理
-vertex.receiver = c(2,3,8)
+vertex.receiver = c(1,3,6)#记得改
 netVisual_aggregate(cellchat, signaling = "MK",  vertex.receiver = vertex.receiver,layout="hierarchy")
 ##圈图
 par(mfrow=c(1,1))
@@ -859,16 +867,16 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")
 library(CellChat)
 library(ggalluvial)
 
 ##提取表达矩阵和细胞类别创建cellchat对象
 group <- unique(sce$group)
-sce <- subset(sce,group==group[1])
-# sce <- subset(sce,group==group[length(group)])
+# sce <- subset(sce,group==group[1])
+sce <- subset(sce,group==group[length(group)])
 sce <- JoinLayers(sce)
-data.input <- GetAssayData(sce, assay = "RNA", slot = "data")
+data.input <- GetAssayData(sce, assay = "RNA", layer = "data")
 identity <- subset(sce@meta.data, select = "celltype")
 cellchat <- createCellChat(object = data.input, meta = identity,  group.by = "celltype")
 
@@ -905,17 +913,18 @@ cellchat <- computeCommunProbPathway(cellchat)
 cellchat <- aggregateNet(cellchat)
 
 cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
-#cellchat <- computeNetSimilarity(cellchat, type = "functional")
-#cellchat <- netEmbedding(cellchat, type = "functional")
-#cellchat <- netClustering(cellchat, type = "functional")
-#cellchat <- computeNetSimilarity(cellchat, type = "structural")
-#cellchat <- netEmbedding(cellchat, type = "structural")
-#cellchat <- netClustering(cellchat, type = "structural")
 
-cellchat_0 <- cellchat
-save(cellchat_0,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_chat0.rds")
-# cellchat_1 <- cellchat
-# save(cellchat_1,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_chat1.rds")
+cellchat <- computeNetSimilarity(cellchat, type = "functional")
+cellchat <- netEmbedding(cellchat, umap.method = 'uwot',type = "functional")
+cellchat <- netClustering(cellchat, type = "functional",do.parallel = FALSE)
+cellchat <- computeNetSimilarity(cellchat, type = "structural")
+cellchat <- netEmbedding(cellchat,umap.method = 'uwot', type = "structural")
+cellchat <- netClustering(cellchat, type = "structural",do.parallel = FALSE)
+
+# cellchat_0 <- cellchat
+# save(cellchat_0,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D_chat0.rds")
+cellchat_1 <- cellchat
+save(cellchat_1,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D_chat1.rds")
 
 
 
@@ -931,8 +940,8 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_chat1.rds")
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_chat0.rds")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_chat1.rds")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_chat0.rds")
 library(CellChat)
 library(ggalluvial)
 
@@ -951,8 +960,8 @@ gg1 + gg2
 
 #数量与强度差异网络图（保证双方细胞注释种类一样）
 par(mfrow = c(1,2),xpd = TRUE)
-# netVisual_diffInteraction(cellchat, weight.scale = T)
-netVisual_diffInteraction(cellchat, weight.scale = T, measure = "weight")
+netVisual_diffInteraction(cellchat, weight.scale = T)
+netVisual_diffInteraction(cellchat, weight.scale = T, measure = "count")
 
 #数量与强度差异热图
 par(mfrow = c(1,1))

@@ -10,11 +10,14 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_anno.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_anno.RData")
 sce <- subset(sce,celltype=="Epithelial")
-save(sce,file = "~/rawdata/scRNA_virus/virus_3D/virus_3D_epi.RData")
+save(sce,file = "~/rawdata/scRNA_virus/virus_5D/virus_5D_epi.RData")
 
-
+pdf(paste0(outdir,"/","04-",gene,"-epi_MDK.pdf"),height=8,width=12)
+VlnPlot(sce, features = c("MDK","NCL"), split.by = "infected",group.by = "group",pt.size = 0)
+VlnPlot(sce, features = c("MDK","NCL"), group.by = "group",pt.size = 0)
+dev.off()
 
 ##### 感染细胞比例 #####
 library(Seurat)
@@ -28,7 +31,7 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_epi.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_epi.RData")
 
 table(sce$group)#查看各组细胞数
 prop.table(table(sce$infected, sce$group))
@@ -75,12 +78,13 @@ gene = "scRNA_virus"
 outdir = paste0("~/OV/",gene)
 
 
-load("~/rawdata/scRNA_virus/virus_3D/virus_3D_epi.RData")
+load("~/rawdata/scRNA_virus/virus_5D/virus_5D_epi.RData")
 library(monocle)
 library(clusterProfiler)
 library(org.Hs.eg.db)
 
-sce <- subset(sce, group %in% c( "VG161"))
+# sce <- subset(sce, group %in% c( "VG161"))
+sce <- subset(sce, group %in% c( "VG161_L","VG161_R"))
 sce <- JoinLayers(sce)
 
 
@@ -144,7 +148,7 @@ ggplot(results, aes(x =logFC, y= -log10(adj.P.Val), colour=Sig)) + #x、y轴取�
   geom_vline(xintercept=c(-cut_off_log2FC,cut_off_log2FC),lty=4,col="black",lwd=0.8) + #添加x轴辅助线,lty函数调整线的类型："twodash"、"longdash"、"dotdash"、"dotted"、"dashed"、"solid"、"blank"
   geom_hline(yintercept = -log10(cut_off_FDR), lty=4,col="black",lwd=0.8) +  #添加y轴辅助线
   labs(x="log2FC", y="-log10FDR") +  #x、y轴标签
-  ggtitle("IFN-y") + #标题
+  ggtitle("Day 5") + #标题
   theme_bw() + # 主题，help(theme)查找其他个性化设置
   theme(plot.title = element_text(hjust = 0.5),
         legend.position="right", 
@@ -248,7 +252,7 @@ barplot(ego_BP,showCategory = 15,font.size = 30) + ggtitle("barplot for Biologic
         legend.text = element_text(size = 20),       # 图例文字大小
         legend.title = element_text(size = 22, face = "bold") # 图例标题大小（可选）
         )
-cnetplot(ego,color_edge = 'category',foldChange=genelist,showCategory = c("leukocyte migration","leukocyte cell-cell adhesion","regulation of T cell activation"))#igraph::layout_in_circle
+# cnetplot(ego,color_edge = 'category',foldChange=genelist,showCategory = c("leukocyte migration","leukocyte cell-cell adhesion","regulation of T cell activation"))#igraph::layout_in_circle
 dev.off()
 
 ###### GSEA #####
