@@ -4,8 +4,9 @@ graphics.off()
 invisible(gc())
 
 ##### D3注射侧：样本整理、统一TLS评分、待复核ROI #####
-# 本版只做步骤1—3；候选ROI不等于确诊TLS，不自动判断成熟度。
-# 不保存Seurat对象或全基因表达矩阵；默认输出summary.csv、plots.pdf、results.rds。
+# 前半做步骤1—3，后半续接步骤4—6；候选ROI不等于确诊TLS，不自动判断成熟度。
+# 前半输出summary.csv、plots.pdf、results.rds；后半只新增review.csv和review.pdf。
+# 不保存Seurat对象或全基因表达矩阵。
 library(Seurat)
 library(Matrix)
 library(dplyr)
@@ -563,6 +564,24 @@ for (i in seq_len(nrow(samples))) {
 print(summary_table)
 
 ##### 图像函数：匿名H&E预览、统一色阶评分图、候选轮廓 #####
+##### 图版样式 #####
+tls_group_colors <- c(Vehicle = "#426B91", VG161 = "#C35B3F")
+tls_expression_colors <- c("#EDF2F6", "#91AEC7", "#24537D")
+tls_unscored <- "#D2D5D9"
+tls_map_theme <- theme_void(base_size = 10, base_family = "Helvetica") +
+  theme(plot.title = element_text(face = "bold", size = 10, color = "#22313F"),
+        plot.caption = element_text(size = 8, color = "#526170", hjust = 0),
+        plot.tag = element_text(face = "bold", size = 11, color = "#22313F"),
+        legend.title = element_text(size = 8), legend.text = element_text(size = 8),
+        plot.margin = margin(6, 8, 6, 8))
+tls_chart_theme <- theme_classic(base_size = 10, base_family = "Helvetica") +
+  theme(plot.title = element_text(face = "bold", size = 10, color = "#22313F"),
+        plot.tag = element_text(face = "bold", size = 11, color = "#22313F"),
+        axis.line = element_line(linewidth = 0.35, color = "#526170"),
+        axis.ticks = element_line(linewidth = 0.35, color = "#526170"),
+        strip.background = element_blank(), strip.text = element_text(face = "bold"),
+        plot.margin = margin(8, 12, 8, 12))
+
 he_plot <- function(i, candidate = FALSE) {
   im <- images[[i]]
   he <- png::readPNG(im$file)
@@ -572,12 +591,12 @@ he_plot <- function(i, candidate = FALSE) {
   p <- ggplot() + annotation_raster(as.raster(he), xmin = 0, xmax = im$width/im$scale,
                                     ymin = -im$height/im$scale, ymax = 0) + coord_fixed(expand = FALSE,
                                                                                         xlim = c(0, im$width/im$scale), ylim = c(-im$height/im$scale, 0)) +
-    theme_void() + labs(title = paste(samples$alias[i], if (candidate) "candidate ROI: pending review" else "H&E only: review before expression"))
+    tls_map_theme + labs(title = paste(samples$alias[i], if (candidate) "ROI candidates" else "H&E"))
   if (candidate) {
     b <- boundaries[boundaries$sample_id == samples$sample_id[i], ]
     h <- polygons_plot[polygons_plot$sample_id == samples$sample_id[i], ]
-    p <- p + geom_segment(data = b, aes(x = x, y = -y, xend = xend, yend = -yend), color = "#D55E00", linewidth = 0.5) +
-      geom_polygon(data = h, aes(x, -y, group = polygon_id), fill = NA, color = "#0072B2", linewidth = 0.6)
+    p <- p + geom_segment(data = b, aes(x = x, y = -y, xend = xend, yend = -yend), color = "#BB521E", linewidth = 0.45) +
+      geom_polygon(data = h, aes(x, -y, group = polygon_id), fill = NA, color = "#24537D", linewidth = 0.5)
     rr <- rois[rois$sample_id == samples$sample_id[i], ]
     labs <- bind_rows(lapply(rr$roi_id, function(r) {
       ss <- members$spot[members$sample_id == samples$sample_id[i] & members$roi_id == r]
@@ -587,48 +606,68 @@ he_plot <- function(i, candidate = FALSE) {
       }
     }))
     if (nrow(labs)) p <- p + geom_label(data = labs, aes(x, -y, label = roi_id),
-                                        size = 3, fill = "white", color = "#111111", linewidth = 0.2, alpha = 0.9)
-    p <- p + labs(caption = "Orange: expression grid outline; blue: H&E polygon. Neither is a confirmed TLS boundary.")
+                                        size = 3, family = "Helvetica", fill = "white", color = "#22313F", linewidth = 0.15)
+    p <- p + labs(caption = "Orange = expression ROI | Blue = H&E ROI")
   }
   p
 }
-score_map <- function(i, column, title, upper) {
+score_map <- function(i, column, title, upper, unit) {
   m <- spots_all[[i]]
-  p <- ggplot(m, aes(x, -y, color = .data[[column]])) + geom_point(size = 1) +
-    scale_color_gradient(low = "#EEEEEE", high = "#B2182B", na.value = "#777777", limits = c(0, upper)) +
-    coord_fixed() + theme_void() + labs(title = paste(samples$alias[i], title), color = NULL)
+  label <- samples$treatment[i]
+  if (sum(samples$treatment == label) > 1) label <- paste(label, samples$alias[i])
+  p <- ggplot(m, aes(x, -y, color = .data[[column]])) + geom_point(size = 1.2) +
+    scale_color_gradientn(colours = tls_expression_colors, na.value = tls_unscored,
+                          limits = c(0, upper), name = unit) +
+    coord_fixed() + tls_map_theme + labs(title = paste(label, title))
   p
 }
 
 ##### 输出：三份文件，运行信息及小型中间结果集中放入RDS #####
 dir.create(path.expand(outdir), recursive = TRUE, showWarnings = FALSE)
 write.csv(summary_table, file.path(outdir, "summary.csv"), row.names = FALSE)
-pdf(file.path(outdir, "plots.pdf"), width = 11, height = 8, compress = TRUE)
+pdf(file.path(outdir, "plots.pdf"), width = 9, height = 6, family = "Helvetica",
+    useDingbats = FALSE, compress = TRUE)
 tryCatch({
   for (i in order(samples$alias)) print(he_plot(i))
-  print(ggplot(spots, aes(nFeature_common)) + geom_histogram(bins = 40, fill = "#999999", color = "white") +
-          geom_vline(xintercept = aucMaxRank, color = "#D55E00", linetype = 2) + facet_wrap(~alias, ncol = 2) +
-          theme_classic() + labs(title = "Common-gene detection and the same AUCell rank cutoff", x = "Detected common genes", y = "Spots"))
-  columns <- c("host_UMI", "nFeature_common", paste0(names(marker_sets), "_AUC"))
-  for (column in columns) {
-    upper <- if (all(is.na(spots[[column]]))) 1 else max(spots[[column]], na.rm = TRUE)
-    if (!is.finite(upper) || upper <= 0) upper <- 1
-    print(wrap_plots(lapply(order(samples$alias), function(i) score_map(i, column, column, upper)), ncol = 2))
+  print(ggplot(spots, aes(nFeature_common)) + geom_histogram(bins = 40, fill = "#91AEC7", color = "white", linewidth = 0.2) +
+          geom_vline(xintercept = aucMaxRank, color = "#BB521E", linetype = 2, linewidth = 0.5) +
+          facet_wrap(~alias, ncol = 2) + tls_chart_theme +
+          labs(title = "AUCell rank cutoff", x = "Detected common genes", y = "Spots"))
+  map_titles <- c(host_UMI = "Host UMI", nFeature_common = "Detected genes", TLS22_AUC = "TLS22",
+                  Imprint29_AUC = "Imprint29", Bcell_AUC = "B-cell markers", Tcell_AUC = "T-cell markers",
+                  Organization_AUC = "Organization", GC_related_AUC = "GC markers")
+  spatial_panels <- list(c("host_UMI", "nFeature_common"), c("TLS22_AUC", "Imprint29_AUC"),
+                         c("Bcell_AUC", "Tcell_AUC"), c("Organization_AUC", "GC_related_AUC"))
+  map_order <- order(match(samples$treatment, names(tls_group_colors)), samples$alias)
+  for (pair in spatial_panels) {
+    rows <- lapply(pair, function(column) {
+      upper <- if (all(is.na(spots[[column]]))) 1 else max(spots[[column]], na.rm = TRUE)
+      if (!is.finite(upper) || upper <= 0) upper <- 1
+      unit <- if (endsWith(column, "_AUC")) "AUC" else if (column == "host_UMI") "UMI" else "Genes"
+      maps <- lapply(map_order, function(i) score_map(i, column, map_titles[[column]], upper, unit))
+      for (j in seq_len(length(maps) - 1L)) maps[[j]] <- maps[[j]] + theme(legend.position = "none")
+      wrap_plots(maps, ncol = 2)
+    })
+    print(wrap_plots(rows, ncol = 1) + plot_annotation(tag_levels = "a",
+                                                       caption = if (any(endsWith(pair, "_AUC"))) "Gray = unscored" else NULL))
   }
   for (i in order(samples$alias)) print(he_plot(i, candidate = TRUE))
   # TLS可能仅占小区域，全片中位数常为0；同时展示均值和候选数，不只比较中位数。
   plot_data <- summary_table
   plot_data$treatment <- factor(plot_data$treatment, levels = c("Vehicle", "VG161"))
   p1 <- ggplot(plot_data, aes(treatment, TLS22_AUC_mean, color = treatment)) + geom_point(size = 3) +
-    theme_classic() + labs(title = "TLS22 mean AUC", subtitle = "Evaluable spots only", y = "Mean AUCell AUC", x = NULL)
+    tls_chart_theme + labs(title = "TLS22", y = "Mean AUC", x = NULL)
   p2 <- ggplot(plot_data, aes(treatment, Imprint29_AUC_mean, color = treatment)) + geom_point(size = 3) +
-    theme_classic() + labs(title = "Imprint29 mean AUC", subtitle = "See measured gene coverage", y = "Mean AUCell AUC", x = NULL)
+    tls_chart_theme + labs(title = "Imprint29", y = "Mean AUC", x = NULL)
   p3 <- ggplot(plot_data, aes(treatment, n_expression_ROI, color = treatment)) + geom_point(size = 3) +
-    theme_classic() + labs(title = "Expression candidate ROI", subtitle = "Pending review; not confirmed TLS", y = "Candidates", x = NULL)
+    tls_chart_theme + labs(title = "Expression candidates", y = "ROIs", x = NULL)
   p4 <- ggplot(plot_data, aes(treatment, AUC_assessable_fraction_QC, color = treatment)) + geom_point(size = 3) +
-    scale_y_continuous(limits = c(0, 1)) + theme_classic() +
-    labs(title = "AUCell assessable fraction", subtitle = "Among spots passing basic QC", y = "Fraction", x = NULL)
-  print(wrap_plots(p1, p2, p3, p4, ncol = 2) + plot_annotation(title = "D3 injected: one slice per group, descriptive only"))
+    scale_y_continuous(limits = c(0, 1)) + tls_chart_theme +
+    labs(title = "AUCell coverage", y = "Fraction of QC spots", x = NULL)
+  summary_plots <- lapply(list(p1, p2, p3, p4), function(p) {
+    p + scale_color_manual(values = tls_group_colors) + theme(legend.position = "none")
+  })
+  print(wrap_plots(summary_plots, ncol = 2) + plot_annotation(tag_levels = "a"))
 }, finally = dev.off())
 results <- list(samples = samples, summary = summary_table, spots = spots, rois = rois,
                 members = members, expression_boundaries = boundaries, HE_polygons = HE_polygons,
@@ -657,3 +696,442 @@ results <- list(samples = samples, summary = summary_table, spots = spots, rois 
 saveRDS(results, file.path(outdir, "results.rds"), compress = "gzip")
 message("完成。输出目录：", normalizePath(outdir, winslash = "/", mustWork = FALSE))
 message("候选ROI均待复核；results.rds中保存坐标、基因覆盖、阈值敏感性和运行信息。")
+
+##### 第4—6步：续接现有结果，不再次清理运行环境 #####
+# 前面的清理只在整个脚本最开始执行。后续可以从这里单独运行，不必重算AUCell。
+library(Matrix)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+
+##### 后续输入与参数：默认沿用上一步输出目录 #####
+review_dir <- if (exists("outdir", inherits = FALSE)) outdir else "~/OV/SCT/TLS_D3"
+review_input <- file.path(review_dir, "results.rds")
+review_file <- file.path(review_dir, "review.csv")
+context_rings <- 2L                  # 原始六邻域外扩两圈，不跨组织孔洞。
+depth_bins <- 3L                     # UMI与检出基因数各分三档，作技术敏感性检查。
+min_stratum_spots <- 20L             # 两片均达到此数量的分层才用于共同权重描述。
+review_image_max_px <- 1600L
+review_image_files <- character()    # 图像搬家时填写命名向量，如c(VG161_3D_1="/path/image.png")。
+
+tls <- readRDS(path.expand(review_input))
+needed <- c("samples", "summary", "spots", "rois", "members", "marker_counts", "info")
+if (!all(needed %in% names(tls))) stop("review_input不是本流程的results.rds。")
+if (context_rings < 0 || depth_bins < 1 || min_stratum_spots < 1) stop("后续参数无效。")
+tls_spots <- tls$spots
+tls_rois <- tls$rois
+prefix <- tls$info$gene_prefix
+if (is.null(prefix)) prefix <- ""
+review_panels <- list(
+  Bcell = c("MS4A1", "CD79A", "CD79B", "CD19", "CD22"),
+  Tcell = c("CD3D", "CD3E", "CD3G", "TRAC", "TRBC1", "TRBC2"),
+  Organization = c("CXCL13", "CCL19", "CCL21"),
+  FDC_related = c("CR2", "FCER2"),
+  GC_B_related = c("AICDA", "RGS13", "SERPINA9"),
+  GC_reference = c("BCL6", "MEF2B", "MKI67"))
+review_genes <- unique(c(unlist(review_panels, use.names = FALSE), substring(tls$gene_sets_used$TLS22, nchar(prefix)+1)))
+for (s in tls$samples$sample_id) {
+  m <- tls$marker_counts[[s]]
+  ss <- tls_spots$spot[tls_spots$sample_id == s]
+  if (is.null(m) || anyDuplicated(colnames(m)) || !setequal(colnames(m), ss)) stop(s, "：marker counts与spot表不一致。")
+}
+if (anyDuplicated(paste(tls_rois$sample_id, tls_rois$roi_id))) stop("ROI标识重复。")
+if (any(!paste(tls$members$sample_id,tls$members$roi_id) %in% paste(tls_rois$sample_id,tls_rois$roi_id))) stop("ROI成员表含未知ROI。")
+
+##### 原始六邻域和ROI邻域：这里独立定义，便于只运行后半段 #####
+review_graph <- function(m) {
+  key <- paste(m$array_row, m$array_col, sep = ":")
+  if (anyDuplicated(key)) stop("阵列坐标重复。")
+  off <- rbind(c(0, 2), c(1, 1), c(1, -1))
+  e <- bind_rows(lapply(seq_len(nrow(off)), function(k) {
+    j <- match(paste(m$array_row+off[k, 1], m$array_col+off[k, 2], sep = ":"), key)
+    data.frame(from = m$spot[!is.na(j)], to = m$spot[j[!is.na(j)]])
+  }))
+  igraph::graph_from_data_frame(e, directed = FALSE, vertices = data.frame(name = m$spot))
+}
+roi_context <- graphs_review <- vector("list", nrow(tls_rois))
+gene_evidence <- roi_evidence <- composition <- list()
+all_candidate_keys <- paste(tls$members$sample_id, tls$members$spot, sep = "|")
+for (i in seq_len(nrow(tls_rois))) {
+  s <- tls_rois$sample_id[i]; rid <- tls_rois$roi_id[i]
+  m <- tls_spots[tls_spots$sample_id == s, ]
+  core <- unique(tls$members$spot[tls$members$sample_id == s & tls$members$roi_id == rid])
+  if (!all(core %in% m$spot)) stop(rid, "：成员条码不存在。")
+  g <- review_graph(m[m$QC_pass | m$spot %in% core, ])
+  near <- if (length(core)) unique(unlist(igraph::ego(g, order = context_rings, nodes = core), use.names = FALSE)) else integer()
+  near_spots <- igraph::V(g)$name[near]
+  ring <- setdiff(near_spots, core)
+  # 背景只用QC合格、且不属于任何候选的邻域spot。
+  ring <- ring[m$QC_pass[match(ring, m$spot)] & !paste(s, ring, sep = "|") %in% all_candidate_keys]
+  roi_context[[i]] <- list(sample_id = s, roi_id = rid, core = core, context = union(core, near_spots), ring = ring)
+  ct <- tls$marker_counts[[s]]
+  for (gene in review_genes) {
+    feature <- paste0(prefix, gene)
+    for (zone in c("core", "ring")) {
+      ss <- if (zone == "core") core else ring
+      assessable <- feature %in% rownames(ct) && length(ss) > 0
+      raw <- if (assessable) as.numeric(ct[feature, ss]) else numeric()
+      qc <- if (length(ss)) m$QC_pass[match(ss, m$spot)] else logical()
+      norm <- if (assessable && any(qc)) log1p(raw[qc]/m$host_UMI[match(ss[qc], m$spot)]*1e4) else numeric()
+      gene_evidence[[length(gene_evidence)+1L]] <- data.frame(sample_id = s, roi_id = rid,
+                                                              zone = zone, gene = gene, in_matrix = feature %in% rownames(ct), n_spots = length(ss),
+                                                              UMI = if (assessable) sum(raw) else NA_real_,
+                                                              n_detected_spots = if (assessable) sum(raw > 0) else NA_integer_,
+                                                              mean_logCP10k_QC = if (length(norm)) mean(norm) else NA_real_)
+    }
+  }
+  row <- data.frame(sample_id = s, roi_id = rid, n_core = length(core), n_ring = length(ring),
+                    n_core_QC = sum(m$QC_pass[match(core,m$spot)]), n_core_AUC = sum(m$AUC_assessable[match(core,m$spot)]),
+                    core_host_UMI_median = if (length(core)) median(m$host_UMI[match(core, m$spot)]) else NA_real_,
+                    ring_host_UMI_median = if (length(ring)) median(m$host_UMI[match(ring, m$spot)]) else NA_real_)
+  for (panel in names(review_panels)) {
+    features <- paste0(prefix, review_panels[[panel]])
+    available <- all(features %in% rownames(ct)) && length(core) > 0
+    row[[paste0(panel, "_UMI")]] <- if (available) sum(ct[features, core, drop = FALSE]) else NA_real_
+    row[[paste0(panel, "_genes_detected")]] <- if (available) sum(Matrix::rowSums(ct[features, core, drop = FALSE]) > 0) else NA_integer_
+  }
+  row$RNA_B_support <- if (is.na(row$Bcell_UMI) || row$n_core_QC == 0) "not_assessable" else if (row$Bcell_UMI == 0) "not_detected" else "detected_requires_review"
+  row$RNA_GC_B_support <- if (is.na(row$GC_B_related_UMI) || row$n_core_QC == 0) "not_assessable" else if (row$GC_B_related_UMI == 0) "not_detected" else "detected_requires_review"
+  roi_evidence[[i]] <- row
+  for (panel in intersect(c("TLS22", "Imprint29"), names(tls$gene_sets_used))) {
+    gg <- intersect(tls$gene_sets_used[[panel]], rownames(ct))
+    if (length(core) && length(gg)) {
+      uu <- Matrix::rowSums(ct[gg, core, drop = FALSE])
+      composition[[length(composition)+1L]] <- data.frame(sample_id = s, roi_id = rid, panel = panel,
+                                                          gene = substring(names(uu), nchar(prefix)+1), raw_UMI = as.numeric(uu),
+                                                          raw_UMI_fraction = if (sum(uu) > 0) as.numeric(uu)/sum(uu) else NA_real_)
+    }
+  }
+}
+gene_evidence <- if (length(gene_evidence)) bind_rows(gene_evidence) else data.frame(sample_id=character(), roi_id=character(), zone=character(), gene=character(), UMI=numeric())
+roi_evidence <- if (length(roi_evidence)) bind_rows(roi_evidence) else data.frame(sample_id=character(), roi_id=character(), n_core=integer(), n_ring=integer(), RNA_B_support=character(), RNA_GC_B_support=character())
+composition <- if (length(composition)) bind_rows(composition) else data.frame(sample_id=character(), roi_id=character(), panel=character(), gene=character(), raw_UMI=numeric(), raw_UMI_fraction=numeric())
+
+##### 第4步：生成一张审核表，保留样本整片审核行和逐ROI审核行 #####
+# review.csv中只填写人工列；自动证据列不要当作已经确认的TLS结论。
+# decision：pending / uncertain / rejected / TLS_supported。
+# maturity：not_assessed / undetermined / early_like / follicle_like / GC_like。
+sample_keys <- setNames(vapply(tls$samples$sample_id, function(s) {
+  j <- match(s, tls$samples$sample_id)
+  digest::digest(list(s, tls_spots[tls_spots$sample_id == s, c("spot", "x", "y", "host_UMI")],
+                      tls$images[[j]][c("position_md5", "image_md5")], tls$rois[tls$rois$sample_id == s, ], tls$marker_counts[[s]],
+                      tls$info[c("aucMaxRank", "null_tail_cutoff", "min_TLS_genes", "min_ROI_spots")] ), algo = "xxhash64")
+}, ""), tls$samples$sample_id)
+review <- data.frame(record_type = "sample", sample_id = tls$samples$sample_id, roi_id = "",
+                     review_key = unname(sample_keys), whole_section_HE_reviewed = FALSE,
+                     HE_reviewed = NA, decision = "not_applicable", morphology = "not_applicable", BT_support = NA,
+                     maturity = "not_applicable", GC_structure_support = NA, tissue_area_mm2 = NA_real_,
+                     n_TLS_structures = NA_real_, TLS_area_mm2 = NA_real_, structures_nonoverlapping = FALSE,
+                     areas_nonoverlapping = FALSE, notes = "", stringsAsFactors = FALSE)
+if (nrow(tls_rois)) {
+  rr <- data.frame(record_type = "roi", sample_id = tls_rois$sample_id, roi_id = tls_rois$roi_id,
+                   review_key = vapply(seq_len(nrow(tls_rois)), function(i) {
+                     ctx <- roi_context[[i]]
+                     digest::digest(list(sample_keys[ctx$sample_id], sort(ctx$core),
+                                         tls$HE_polygons_merged[tls$HE_polygons_merged$roi_id == ctx$roi_id, ]), algo = "xxhash64")
+                   }, ""), whole_section_HE_reviewed = NA, HE_reviewed = FALSE, decision = "pending",
+                   morphology = "not_assessed", BT_support = NA, maturity = "not_assessed", GC_structure_support = NA,
+                   tissue_area_mm2 = NA_real_, n_TLS_structures = NA_real_, TLS_area_mm2 = NA_real_,
+                   structures_nonoverlapping = NA, areas_nonoverlapping = NA, notes = "", stringsAsFactors = FALSE)
+  review <- bind_rows(review, rr)
+}
+review$n_core_spots <- NA_integer_; review$RNA_B_support <- NA_character_; review$RNA_GC_B_support <- NA_character_
+if (nrow(tls_rois)) {
+  ii <- which(review$record_type == "roi")
+  review$n_core_spots[ii] <- roi_evidence$n_core
+  review$RNA_B_support[ii] <- roi_evidence$RNA_B_support
+  review$RNA_GC_B_support[ii] <- roi_evidence$RNA_GC_B_support
+}
+editable <- c("whole_section_HE_reviewed", "HE_reviewed", "decision", "morphology", "BT_support",
+              "maturity", "GC_structure_support", "tissue_area_mm2", "n_TLS_structures", "TLS_area_mm2",
+              "structures_nonoverlapping", "areas_nonoverlapping", "notes")
+if (file.exists(path.expand(review_file))) {
+  previous_review <- read.csv(path.expand(review_file), stringsAsFactors = FALSE, check.names = FALSE)
+  if (!all(c("record_type", "sample_id", "roi_id", "review_key", editable) %in% names(previous_review))) stop("review.csv列名不完整。")
+  previous_review$roi_id[is.na(previous_review$roi_id) & previous_review$record_type == "sample"] <- ""
+  old_key <- paste(previous_review$record_type, previous_review$sample_id, previous_review$roi_id, sep = "|")
+  new_key <- paste(review$record_type, review$sample_id, review$roi_id, sep = "|")
+  if (anyDuplicated(old_key) || !setequal(old_key, new_key)) stop("候选列表已变化或审核行重复；请保留旧表，并把review_file改为新的文件名后再运行。")
+  mm <- match(new_key, old_key)
+  if (any(review$review_key != previous_review$review_key[mm])) stop("旧审核表与当前ROI/坐标/筛查版本不一致，未套用旧结论。请保留旧表并更换review_file。")
+  review[, editable] <- previous_review[mm, editable]
+}
+review$notes[is.na(review$notes)] <- ""
+as_review_bool <- function(x) {
+  z <- toupper(trimws(as.character(x)))
+  z[z %in% c("", "NA")] <- NA_character_
+  if (any(!is.na(z) & !z %in% c("TRUE", "FALSE", "1", "0"))) stop("审核布尔列请填写TRUE/FALSE；未知留NA。")
+  ifelse(is.na(z), NA, z %in% c("TRUE", "1"))
+}
+for (cc in c("whole_section_HE_reviewed", "HE_reviewed", "BT_support", "GC_structure_support", "structures_nonoverlapping", "areas_nonoverlapping")) review[[cc]] <- as_review_bool(review[[cc]])
+is_roi <- review$record_type == "roi"
+if (anyNA(review$decision[is_roi]) || any(!review$decision[is_roi] %in% c("pending", "uncertain", "rejected", "TLS_supported"))) stop("ROI decision值无效。")
+if (anyNA(review$maturity[is_roi]) || any(!review$maturity[is_roi] %in% c("not_assessed", "undetermined", "early_like", "follicle_like", "GC_like"))) stop("maturity值无效。")
+if (anyNA(review$morphology[is_roi]) || any(!review$morphology[is_roi] %in% c("not_assessed","uncertain","no_aggregate","aggregate","follicle_like","GC_like"))) stop("morphology值无效。")
+accepted <- is_roi & review$decision == "TLS_supported"
+if (any(accepted & (is.na(review$HE_reviewed) | !review$HE_reviewed | is.na(review$BT_support) | !review$BT_support))) stop("TLS_supported需要HE_reviewed和BT_support均为TRUE；未知证据不能自动补齐。")
+if (any(accepted & !review$morphology %in% c("aggregate","follicle_like","GC_like"))) stop("TLS_supported还需要明确的聚集/滤泡/GC样形态支持。")
+if (any(accepted & review$RNA_B_support %in% c("not_detected","not_assessable") & !nzchar(trimws(review$notes)), na.rm = TRUE)) stop("该ROI缺少可用B标记支持；若人工支持TLS，请在notes说明额外的B/T与形态依据。")
+if (any(is_roi & !accepted & review$maturity %in% c("early_like", "follicle_like", "GC_like"))) stop("未支持TLS的ROI不能先赋成熟相关类别。")
+if (any(accepted & review$maturity == "GC_like" & (is.na(review$GC_structure_support) | !review$GC_structure_support))) stop("GC_like需要明确的GC结构支持，不能仅凭BCL6/MKI67评分。")
+if (any(accepted & review$maturity == "GC_like" & review$morphology != "GC_like")) stop("GC_like成熟相关类别需要一致的GC样形态记录。")
+for (cc in c("tissue_area_mm2", "TLS_area_mm2")) {
+  raw <- review[[cc]]
+  num <- suppressWarnings(as.numeric(raw))
+  if (any(!is.na(raw) & nzchar(as.character(raw)) & is.na(num)) || any(!is.na(num) & (!is.finite(num) | num <= 0))) stop(cc, "须为正数或NA，不自动换算网格面积。")
+  review[[cc]] <- num
+}
+nn <- suppressWarnings(as.numeric(review$n_TLS_structures))
+if (any(!is.na(review$n_TLS_structures) & is.na(nn)) || any(!is.na(nn) & (!is.finite(nn) | nn < 0 | nn != round(nn)))) stop("n_TLS_structures须为非负整数或NA。")
+if (any(accepted & !is.na(nn) & nn < 1)) stop("支持TLS的ROI至少需包含1个独立结构；未数清时保留NA。")
+if (any(is_roi & !accepted & !is.na(nn) & nn > 0)) stop("未支持TLS的ROI不能预先填写阳性的TLS结构数量。")
+review$n_TLS_structures <- nn
+if (any(accepted & review$maturity %in% c("early_like","follicle_like","GC_like") & (is.na(nn) | nn != 1))) stop("成熟相关类别需要逐结构ROI；多结构ROI请先拆分，未明确数量时保留undetermined。")
+
+##### 第5步：样本级TLS结构指标，未审完保持NA，不能把待审当成零 #####
+structure_summary <- list()
+for (s in tls$samples$sample_id) {
+  sr <- review[review$record_type == "sample" & review$sample_id == s, ]
+  rr <- review[is_roi & review$sample_id == s, ]
+  ss <- tls_spots[tls_spots$sample_id == s, ]
+  ids <- rr$roi_id[rr$decision == "TLS_supported"]
+  whole <- isTRUE(sr$whole_section_HE_reviewed)
+  ROI_complete <- whole && all(rr$decision %in% c("rejected", "TLS_supported")) && all(!is.na(rr$HE_reviewed) & rr$HE_reviewed)
+  nn <- rr$n_TLS_structures[rr$decision == "TLS_supported"]
+  # 一个表达/形态候选ROI可以包含多个TLS，不能默认一ROI=一结构。
+  distinct <- length(ids) <= 1 || isTRUE(sr$structures_nonoverlapping)
+  complete <- ROI_complete && all(!is.na(nn)) && distinct
+  count <- if (complete) sum(nn) else NA_integer_
+  captured <- unique(tls$members$spot[tls$members$sample_id == s & tls$members$roi_id %in% ids])
+  RNA_regions <- if (length(ids)) vapply(ids, function(id) any(tls$members$sample_id == s & tls$members$roi_id == id & tls$members$spot %in% ss$spot[ss$QC_pass]), logical(1)) else logical()
+  coverage_QC <- if (ROI_complete && any(ss$QC_pass) && (!length(ids) || all(RNA_regions))) {
+    sum(ss$spot %in% captured & ss$QC_pass)/sum(ss$QC_pass)
+  } else NA_real_
+  density <- if (complete && !is.na(sr$tissue_area_mm2)) count/sr$tissue_area_mm2 else NA_real_
+  area_fraction <- NA_real_
+  if (complete && !is.na(sr$tissue_area_mm2)) {
+    aa <- rr$TLS_area_mm2[rr$decision == "TLS_supported"]
+    if (!length(ids)) area_fraction <- 0 else if ((length(ids) <= 1 || isTRUE(sr$areas_nonoverlapping)) && all(!is.na(aa))) {
+      if (sum(aa) > sr$tissue_area_mm2*(1+1e-6)) stop(s, "：支持ROI面积总和超过可评估组织面积。")
+      area_fraction <- sum(aa)/sr$tissue_area_mm2
+    }
+  }
+  stage <- rr$maturity[rr$decision == "TLS_supported"]
+  stages_complete <- complete && length(ids) > 0 && all(nn == 1) && all(stage %in% c("early_like", "follicle_like", "GC_like"))
+  n_reviewed <- sum(rr$decision != "pending" & !is.na(rr$HE_reviewed) & rr$HE_reviewed)
+  n_stage_reviewed <- sum(stage %in% c("early_like","follicle_like","GC_like"))
+  structure_summary[[length(structure_summary)+1L]] <- data.frame(sample_id = s,
+                                                                  whole_section_HE_reviewed = whole, ROI_review_complete = ROI_complete, TLS_review_complete = complete,
+                                                                  n_ROI_reviewed = n_reviewed,
+                                                                  n_TLS_supported_ROI_reviewed_subset = if (n_reviewed) length(ids) else NA_integer_,
+                                                                  n_TLS_structures_reviewed_subset = if (n_reviewed && all(!is.na(nn)) && distinct) sum(nn) else NA_integer_,
+                                                                  n_TLS_supported_ROI_whole_section = if (ROI_complete) length(ids) else NA_integer_,
+                                                                  n_TLS_supported_whole_section = count,
+                                                                  supported_ROI_capture_fraction_QC = coverage_QC, TLS_density_per_mm2 = density,
+                                                                  TLS_area_fraction = area_fraction,
+                                                                  n_GC_like_supported_ROI_reviewed = if (n_stage_reviewed) sum(stage == "GC_like") else NA_integer_,
+                                                                  GC_like_fraction_supported_TLS = if (stages_complete) mean(stage == "GC_like") else NA_real_)
+}
+structure_summary <- bind_rows(structure_summary)
+
+##### 第6步：描述性比较，并检查可评估spot的测序复杂度分布影响 #####
+# 共同分层加权只是技术敏感性检查，不是因果校正，也不能补回未评分spot。
+depth_data <- tls_spots[tls_spots$AUC_assessable, ]
+bin_variable <- function(x) {
+  br <- unique(as.numeric(quantile(x, probs = seq(0, 1, length.out = depth_bins+1), names = FALSE)))
+  if (length(br) < 2) rep(1L, length(x)) else as.integer(cut(x, br, include.lowest = TRUE))
+}
+depth_data$stratum <- if (nrow(depth_data)) paste(bin_variable(log1p(depth_data$host_UMI)), bin_variable(depth_data$nFeature_common), sep = "_") else character()
+tab <- table(factor(depth_data$sample_id, levels = tls$samples$sample_id), depth_data$stratum)
+keep <- if (ncol(tab)) colnames(tab)[apply(tab, 2, min) >= min_stratum_spots] else character()
+weights <- if (length(keep)) apply(tab[, keep, drop = FALSE], 2, min) else numeric()
+if (length(weights)) weights <- weights/sum(weights)
+depth_summary <- depth_details <- list()
+for (s in tls$samples$sample_id) {
+  m <- depth_data[depth_data$sample_id == s, ]
+  row <- data.frame(sample_id = s, n_common_depth_strata = length(keep),
+                    n_spots_common_depth_strata = sum(m$stratum %in% keep),
+                    fraction_AUC_spots_in_common_depth = if (nrow(m)) mean(m$stratum %in% keep) else NA_real_)
+  for (module in intersect(c("TLS22", "Imprint29"), names(tls$gene_sets_used))) {
+    values <- vapply(keep, function(k) {
+      v <- m[[paste0(module, "_AUC")]][m$stratum == k]
+      if (!length(v) || all(is.na(v))) NA_real_ else mean(v, na.rm = TRUE)
+    }, numeric(1))
+    row[[paste0(module, "_AUC_depth_standardized")]] <- if (length(keep) && all(is.finite(values))) sum(values*weights[keep]) else NA_real_
+    if (length(keep)) depth_details[[length(depth_details)+1L]] <- data.frame(sample_id=s, module=module, stratum=keep, weight=as.numeric(weights[keep]), mean_AUC=values)
+  }
+  depth_summary[[length(depth_summary)+1L]] <- row
+}
+depth_summary <- bind_rows(depth_summary)
+depth_details <- bind_rows(depth_details)
+new_cols <- union(setdiff(names(structure_summary), "sample_id"), setdiff(names(depth_summary), "sample_id"))
+final_summary <- tls$summary[, setdiff(names(tls$summary), new_cols), drop = FALSE]
+final_summary <- left_join(left_join(final_summary, structure_summary, by = "sample_id"), depth_summary, by = "sample_id")
+for (s in final_summary$sample_id) for (module in c("TLS22","Imprint29")) {
+  v <- tls_spots[[paste0(module,"_AUC")]][tls_spots$sample_id == s & tls_spots$AUC_assessable]
+  final_summary[[paste0(module,"_AUC_mean")]][final_summary$sample_id == s] <- if (!length(v) || all(is.na(v))) NA_real_ else mean(v,na.rm=TRUE)
+}
+descriptive <- list()
+for (metric in c("TLS22_AUC_mean", "Imprint29_AUC_mean", "TLS22_AUC_depth_standardized", "Imprint29_AUC_depth_standardized",
+                 "n_union_candidate_ROI", "n_TLS_supported_whole_section", "supported_ROI_capture_fraction_QC", "TLS_density_per_mm2", "GC_like_fraction_supported_TLS")) {
+  a <- final_summary[[metric]][final_summary$treatment == "Vehicle"]
+  b <- final_summary[[metric]][final_summary$treatment == "VG161"]
+  if (length(a) == 1 && length(b) == 1) descriptive[[length(descriptive)+1L]] <- data.frame(metric = metric,
+                                                                                            Vehicle = a, VG161 = b, difference_VG161_minus_Vehicle = b-a,
+                                                                                            ratio_VG161_over_Vehicle = if (is.finite(a) && is.finite(b) && a != 0) b/a else NA_real_)
+}
+descriptive <- bind_rows(descriptive)
+print(final_summary[, c("sample_id", "n_union_candidate_ROI", "TLS_review_complete", "n_TLS_supported_whole_section", "TLS22_AUC_mean", "TLS22_AUC_depth_standardized")])
+print(roi_evidence)
+
+##### 复核图：ROI局部H&E、原始marker、组成及描述性比较 #####
+# 本段可独立运行，沿用前半段的字体和配色。
+review_group_colors <- c(Vehicle = "#426B91", VG161 = "#C35B3F")
+review_expression_colors <- c("#EDF2F6", "#91AEC7", "#24537D")
+review_map_theme <- theme_void(base_size = 10, base_family = "Helvetica") +
+  theme(plot.title = element_text(face = "bold", size = 10, color = "#22313F"),
+        plot.caption = element_text(size = 8, color = "#526170", hjust = 0),
+        plot.tag = element_text(face = "bold", size = 11, color = "#22313F"),
+        legend.title = element_text(size = 8), legend.text = element_text(size = 8),
+        plot.margin = margin(6, 8, 6, 8))
+review_chart_theme <- theme_classic(base_size = 10, base_family = "Helvetica") +
+  theme(plot.title = element_text(face = "bold", size = 10, color = "#22313F"),
+        plot.tag = element_text(face = "bold", size = 11, color = "#22313F"),
+        axis.line = element_line(linewidth = 0.35, color = "#526170"),
+        axis.ticks = element_line(linewidth = 0.35, color = "#526170"),
+        plot.margin = margin(8, 12, 8, 12))
+review_marker_panels <- list(c("MS4A1", "CD79A", "CD3D", "TRBC2", "CCL19", "CXCL13"),
+                             c("CR2", "FCER2", "AICDA", "BCL6", "MKI67", "SERPINA9"))
+marker_limits <- vapply(roi_context, function(ctx) {
+  counts <- tls$marker_counts[[ctx$sample_id]]
+  genes <- intersect(paste0(prefix, unlist(review_marker_panels)), rownames(counts))
+  if (!length(genes) || !length(ctx$context)) return(0)
+  m <- tls_spots[tls_spots$sample_id == ctx$sample_id, ]
+  host <- pmax(m$host_UMI[match(ctx$context, m$spot)], 1)
+  scaled <- sweep(as.matrix(counts[genes, ctx$context, drop = FALSE]), 2, host, "/")
+  max(log1p(scaled * 1e4))
+}, numeric(1))
+review_marker_max <- max(c(0, marker_limits), na.rm = TRUE)
+if (review_marker_max == 0) review_marker_max <- 1
+review_auc_max <- max(c(0, tls_spots$TLS22_AUC), na.rm = TRUE)
+if (review_auc_max == 0) review_auc_max <- 1
+
+review_view <- function(i) {
+  ctx <- roi_context[[i]]
+  m <- tls_spots[tls_spots$sample_id == ctx$sample_id, ]
+  mm <- m[m$spot %in% ctx$context, ]
+  j <- match(ctx$sample_id, tls$samples$sample_id)
+  im <- tls$images[[j]]
+  hp <- tls$HE_polygons_merged[tls$HE_polygons_merged$sample_id == ctx$sample_id & tls$HE_polygons_merged$roi_id == ctx$roi_id, ]
+  xx <- c(mm$x, hp$x); yy <- c(mm$y, hp$y)
+  if (!length(xx)) { xx <- m$x; yy <- m$y }
+  padding <- max(diff(range(xx)), diff(range(yy)), 1)*0.15
+  limits <- list(x = range(xx)+c(-padding, padding), y = range(yy)+c(-padding, padding))
+  file <- if (ctx$sample_id %in% names(review_image_files)) review_image_files[[ctx$sample_id]] else im$file
+  p <- ggplot()
+  image_ok <- !is.null(file) && length(file) == 1 && file.exists(path.expand(file))
+  if (image_ok) {
+    if (!is.null(im$image_md5) && !identical(unname(tools::md5sum(path.expand(file))), im$image_md5)) stop("H&E文件指纹改变；不能沿用旧比例尺/ROI，请检查review_image_files。")
+    he <- png::readPNG(path.expand(file))
+    if (!identical(as.integer(dim(he)[1:2]),as.integer(c(im$height,im$width)))) stop("H&E尺寸与保存的坐标比例不一致，未自动拉伸。")
+    step <- max(1L, ceiling(max(dim(he)[1:2])/review_image_max_px))
+    rr <- seq(1, dim(he)[1], by = step); cc <- seq(1, dim(he)[2], by = step)
+    he <- if (length(dim(he)) == 2) he[rr, cc, drop=FALSE] else he[rr, cc, , drop=FALSE]
+    p <- p + annotation_raster(as.raster(he), xmin=0, xmax=im$width/im$scale, ymin=-im$height/im$scale, ymax=0)
+  } else p <- p + annotate("text", x=mean(limits$x), y=-mean(limits$y), label="H&E unavailable", size=3)
+  bb <- tls$expression_boundaries[tls$expression_boundaries$sample_id == ctx$sample_id & tls$expression_boundaries$roi_id == ctx$roi_id, ]
+  p <- p + geom_segment(data=bb, aes(x=x, y=-y, xend=xend, yend=-yend), color="#BB521E", linewidth=0.5) +
+    geom_polygon(data=hp, aes(x,-y,group=polygon_id), fill=NA, color="#24537D", linewidth=0.5) +
+    coord_fixed(xlim=limits$x, ylim=-rev(limits$y), expand=FALSE) + review_map_theme +
+    labs(title=paste(ctx$roi_id, "H&E"))
+  list(plot=p, met=mm, limits=limits, core=ctx$core)
+}
+review_point_map <- function(m, view, title, upper, unit) {
+  m$core <- m$spot %in% view$core
+  ggplot(m, aes(x, -y)) + geom_point(aes(color = value, shape = core), size = 2.6, stroke = 0.5) +
+    scale_color_gradientn(colours = review_expression_colors, na.value = "#D2D5D9",
+                          limits = c(0, upper), name = unit) +
+    scale_shape_manual(values = c(`FALSE` = 1, `TRUE` = 16), guide = "none") +
+    coord_fixed(xlim = view$limits$x, ylim = -rev(view$limits$y), expand = FALSE) +
+    review_map_theme + labs(title = title)
+}
+review_marker_map <- function(i, gene, view) {
+  s <- roi_context[[i]]$sample_id; ct <- tls$marker_counts[[s]]; feature <- paste0(prefix, gene)
+  m <- view$met
+  m$value <- if (feature %in% rownames(ct) && nrow(m)) log1p(as.numeric(ct[feature,m$spot])/pmax(m$host_UMI,1)*1e4) else rep(NA_real_,nrow(m))
+  review_point_map(m, view, gene, review_marker_max, "log1p(CP10K)")
+}
+pdf(file.path(review_dir, "review.pdf"), width = 9, height = 6, family = "Helvetica",
+    useDingbats = FALSE, compress = TRUE)
+tryCatch({
+  for (i in seq_len(nrow(tls_rois))) {
+    v <- review_view(i)
+    score_spots <- v$met
+    score_spots$value <- score_spots$TLS22_AUC
+    p_score <- review_point_map(score_spots, v, "TLS22", review_auc_max, "AUC")
+    score_key <- if (!nrow(score_spots)) "No captured spots" else "Solid = ROI | Open = neighbors | Gray = unscored"
+    print(wrap_plots(v$plot, p_score, widths = c(1, 1)) +
+            plot_annotation(tag_levels = "a", caption = score_key))
+    for (genes in review_marker_panels) {
+      maps <- lapply(genes, function(gene) review_marker_map(i, gene, v))
+      for (j in seq_len(length(maps) - 1L)) maps[[j]] <- maps[[j]] + theme(legend.position = "none")
+      print(wrap_plots(maps, ncol = 3) +
+              plot_annotation(title = paste(tls_rois$roi_id[i], "markers"), tag_levels = "a",
+                              caption = "Solid = ROI | Open = neighbors | Gray = unavailable"))
+    }
+    comp <- composition[composition$roi_id == tls_rois$roi_id[i], ]
+    pp <- lapply(c("TLS22","Imprint29"),function(panel) {
+      d <- comp[comp$panel==panel, ]; d <- head(d[order(d$raw_UMI,decreasing=TRUE), ],10)
+      d$gene <- factor(d$gene,levels=rev(d$gene))
+      ggplot(d, aes(raw_UMI, gene)) + geom_col(fill = "#426B91", width = 0.7) + review_chart_theme +
+        scale_x_continuous(expand = expansion(mult = c(0, 0.08))) +
+        labs(title = panel, x = "Core UMI", y = NULL)
+    })
+    print(wrap_plots(pp, ncol = 2) + plot_annotation(title = paste(tls_rois$roi_id[i], "marker counts"), tag_levels = "a"))
+  }
+  dd <- bind_rows(data.frame(sample_id=final_summary$sample_id,method="Unadjusted",value=final_summary$TLS22_AUC_mean),
+                  data.frame(sample_id=final_summary$sample_id,method="Common depth strata",value=final_summary$TLS22_AUC_depth_standardized))
+  dd <- left_join(dd,tls$samples[,c("sample_id","treatment")],by="sample_id")
+  dd$treatment <- factor(dd$treatment,levels=c("Vehicle","VG161"))
+  score_panel <- ggplot(dd, aes(treatment, value, color = treatment, shape = method, group = method)) +
+    geom_point(size = 3.1, stroke = 0.85, position = position_dodge(width = 0.24)) +
+    scale_color_manual(values = review_group_colors, guide = "none") +
+    scale_shape_manual(values = c(Unadjusted = 16, `Common depth strata` = 1)) +
+    review_chart_theme + theme(legend.position = "top") +
+    labs(title = "TLS22 scores", x = NULL, y = "Mean AUC", shape = NULL)
+  status <- final_summary[,c("sample_id","n_union_candidate_ROI","TLS_review_complete","n_TLS_supported_whole_section")]
+  status_table <- data.frame(Sample = status$sample_id, Candidates = as.character(status$n_union_candidate_ROI),
+                             Review = ifelse(status$TLS_review_complete, "Complete", "Pending"),
+                             `Supported TLS` = ifelse(is.na(status$n_TLS_supported_whole_section), "NA", status$n_TLS_supported_whole_section),
+                             check.names = FALSE)
+  cells <- stack(status_table)
+  cells$row <- rep(rev(seq_len(nrow(status_table))), ncol(status_table))
+  review_panel <- ggplot(cells, aes(ind, row)) +
+    geom_tile(fill = "#F0F4F7", color = "white", linewidth = 0.5, width = 1, height = 0.95) +
+    geom_text(aes(label = values), family = "Helvetica", size = 3.2, color = "#22313F") +
+    scale_x_discrete(position = "top") + review_map_theme +
+    theme(axis.text.x = element_text(face = "bold", size = 9, color = "#22313F", margin = margin(b = 4))) +
+    labs(title = "TLS review")
+  print(wrap_plots(score_panel, review_panel, ncol = 1, heights = c(2.4, 1)) + plot_annotation(tag_levels = "a"))
+},finally=dev.off())
+
+##### 沿用原结果：只新增review.csv和review.pdf #####
+write.csv(review,path.expand(review_file),row.names=FALSE,na="NA")
+tls$summary <- final_summary
+tls$followup <- list(review=review,roi_evidence=roi_evidence,gene_evidence=gene_evidence,
+                     raw_marker_composition=composition,ROI_context=roi_context,structure_summary=structure_summary,
+                     depth_summary=depth_summary,depth_details=depth_details,descriptive_comparison=descriptive,
+                     info=list(run_time=format(Sys.time(),"%Y-%m-%d %H:%M:%S %Z"),context_rings=context_rings,
+                               depth_bins=depth_bins,min_stratum_spots=min_stratum_spots,review_file=review_file,
+                               interpretation=c("RNA evidence and manual decisions are separate; no ROI is automatically confirmed.",
+                                                "Missing or uncaptured marker evidence is NA; measured zeros remain zero.",
+                                                "Whole-section supported counts stay NA until full H&E and all candidates are resolved.",
+                                                "Grid/capture coverage is not histological area; physical metrics require measured areas.",
+                                                "Raw UMI fractions are not exact AUCell contribution fractions.",
+                                                "Depth standardization is a descriptive sensitivity analysis, not causal correction or recovery of excluded spots.",
+                                                "The D3 comparison uses one slice per group. AUCell summaries use evaluable captured spots."),
+                               sessionInfo=capture.output(sessionInfo())))
+saveRDS(tls,path.expand(review_input),compress="gzip")
+write.csv(final_summary,file.path(review_dir,"summary.csv"),row.names=FALSE)
+results <- tls
+message("第4—6步完成：查看review.pdf，并在review.csv回填审核列后重跑本段。")
