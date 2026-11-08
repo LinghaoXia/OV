@@ -567,19 +567,20 @@ print(summary_table)
 ##### 图版样式 #####
 tls_group_colors <- c(Vehicle = "#426B91", VG161 = "#C35B3F")
 tls_expression_colors <- c("#EDF2F6", "#91AEC7", "#24537D")
-tls_unscored <- "#D2D5D9"
-tls_map_theme <- theme_void(base_size = 10, base_family = "Helvetica") +
+tls_unscored <- "#B8BDC3"
+tls_strip_theme <- theme(strip.background = element_rect(fill = "#EDF2F6", color = NA),
+                         strip.text = element_text(face = "bold", size = 9, color = "#22313F", hjust = 0.5,
+                                                   margin = margin(3, 4, 3, 4)))
+tls_map_theme <- theme_void(base_size = 10, base_family = "Helvetica") + tls_strip_theme +
   theme(plot.title = element_text(face = "bold", size = 10, color = "#22313F"),
-        plot.caption = element_text(size = 8, color = "#526170", hjust = 0),
-        plot.tag = element_text(face = "bold", size = 11, color = "#22313F"),
         legend.title = element_text(size = 8), legend.text = element_text(size = 8),
         plot.margin = margin(6, 8, 6, 8))
-tls_chart_theme <- theme_classic(base_size = 10, base_family = "Helvetica") +
+tls_chart_theme <- theme_classic(base_size = 10, base_family = "Helvetica") + tls_strip_theme +
   theme(plot.title = element_text(face = "bold", size = 10, color = "#22313F"),
-        plot.tag = element_text(face = "bold", size = 11, color = "#22313F"),
-        axis.line = element_line(linewidth = 0.35, color = "#526170"),
+        panel.border = element_rect(fill = NA, color = "#526170", linewidth = 0.35),
+        axis.line = element_blank(),
         axis.ticks = element_line(linewidth = 0.35, color = "#526170"),
-        strip.background = element_blank(), strip.text = element_text(face = "bold"),
+        strip.background = element_rect(fill = "#EDF2F6", color = "#526170", linewidth = 0.35),
         plot.margin = margin(8, 12, 8, 12))
 
 he_plot <- function(i, candidate = FALSE) {
@@ -595,8 +596,11 @@ he_plot <- function(i, candidate = FALSE) {
   if (candidate) {
     b <- boundaries[boundaries$sample_id == samples$sample_id[i], ]
     h <- polygons_plot[polygons_plot$sample_id == samples$sample_id[i], ]
-    p <- p + geom_segment(data = b, aes(x = x, y = -y, xend = xend, yend = -yend), color = "#BB521E", linewidth = 0.45) +
-      geom_polygon(data = h, aes(x, -y, group = polygon_id), fill = NA, color = "#24537D", linewidth = 0.5)
+    p <- p + geom_segment(data = b, aes(x = x, y = -y, xend = xend, yend = -yend,
+                                        color = "Expression candidate"), linewidth = 0.45) +
+      geom_polygon(data = h, aes(x, -y, group = polygon_id, color = "H&E candidate"),
+                   fill = NA, linewidth = 0.5, key_glyph = "path") +
+      scale_color_manual(name = NULL, values = c(`Expression candidate` = "#BB521E", `H&E candidate` = "#24537D"))
     rr <- rois[rois$sample_id == samples$sample_id[i], ]
     labs <- bind_rows(lapply(rr$roi_id, function(r) {
       ss <- members$spot[members$sample_id == samples$sample_id[i] & members$roi_id == r]
@@ -607,18 +611,23 @@ he_plot <- function(i, candidate = FALSE) {
     }))
     if (nrow(labs)) p <- p + geom_label(data = labs, aes(x, -y, label = roi_id),
                                         size = 3, family = "Helvetica", fill = "white", color = "#22313F", linewidth = 0.15)
-    p <- p + labs(caption = "Orange = expression ROI | Blue = H&E ROI")
   }
   p
 }
-score_map <- function(i, column, title, upper, unit) {
+score_map <- function(i, column, title, upper, unit, show_unscored) {
   m <- spots_all[[i]]
   label <- samples$treatment[i]
   if (sum(samples$treatment == label) > 1) label <- paste(label, samples$alias[i])
-  p <- ggplot(m, aes(x, -y, color = .data[[column]])) + geom_point(size = 1.2) +
+  unscored_guide <- if (show_unscored) {
+    guide_legend(order = 2, override.aes = list(colour = tls_unscored, size = 2))
+  } else "none"
+  p <- ggplot(m, aes(x, -y, color = .data[[column]])) +
+    geom_point(aes(shape = is.na(.data[[column]])), size = 1.2, show.legend = c(shape = TRUE)) +
     scale_color_gradientn(colours = tls_expression_colors, na.value = tls_unscored,
-                          limits = c(0, upper), name = unit) +
-    coord_fixed() + tls_map_theme + labs(title = paste(label, title))
+                          limits = c(0, upper), name = unit, guide = guide_colorbar(order = 1)) +
+    scale_shape_manual(name = NULL, values = c(`FALSE` = 16, `TRUE` = 16),
+                       limits = c(FALSE, TRUE), breaks = TRUE, labels = "Unscored", guide = unscored_guide) +
+    coord_fixed() + facet_wrap(vars(!!paste(label, title))) + tls_map_theme
   p
 }
 
@@ -644,30 +653,34 @@ tryCatch({
       upper <- if (all(is.na(spots[[column]]))) 1 else max(spots[[column]], na.rm = TRUE)
       if (!is.finite(upper) || upper <= 0) upper <- 1
       unit <- if (endsWith(column, "_AUC")) "AUC" else if (column == "host_UMI") "UMI" else "Genes"
-      maps <- lapply(map_order, function(i) score_map(i, column, map_titles[[column]], upper, unit))
+      show_unscored <- anyNA(spots[[column]])
+      maps <- lapply(map_order, function(i) score_map(i, column, map_titles[[column]], upper, unit, show_unscored))
       for (j in seq_len(length(maps) - 1L)) maps[[j]] <- maps[[j]] + theme(legend.position = "none")
       wrap_plots(maps, ncol = 2)
     })
-    print(wrap_plots(rows, ncol = 1) + plot_annotation(tag_levels = "a",
-                                                       caption = if (any(endsWith(pair, "_AUC"))) "Gray = unscored" else NULL))
+    print(wrap_plots(rows, ncol = 1))
   }
   for (i in order(samples$alias)) print(he_plot(i, candidate = TRUE))
   # TLS可能仅占小区域，全片中位数常为0；同时展示均值和候选数，不只比较中位数。
   plot_data <- summary_table
   plot_data$treatment <- factor(plot_data$treatment, levels = c("Vehicle", "VG161"))
   p1 <- ggplot(plot_data, aes(treatment, TLS22_AUC_mean, color = treatment)) + geom_point(size = 3) +
-    tls_chart_theme + labs(title = "TLS22", y = "Mean AUC", x = NULL)
+    tls_chart_theme + labs(y = "Mean AUC", x = NULL)
   p2 <- ggplot(plot_data, aes(treatment, Imprint29_AUC_mean, color = treatment)) + geom_point(size = 3) +
-    tls_chart_theme + labs(title = "Imprint29", y = "Mean AUC", x = NULL)
+    tls_chart_theme + labs(y = "Mean AUC", x = NULL)
   p3 <- ggplot(plot_data, aes(treatment, n_expression_ROI, color = treatment)) + geom_point(size = 3) +
-    tls_chart_theme + labs(title = "Expression candidates", y = "ROIs", x = NULL)
+    tls_chart_theme + labs(y = "ROIs", x = NULL)
   p4 <- ggplot(plot_data, aes(treatment, AUC_assessable_fraction_QC, color = treatment)) + geom_point(size = 3) +
     scale_y_continuous(limits = c(0, 1)) + tls_chart_theme +
-    labs(title = "AUCell coverage", y = "Fraction of QC spots", x = NULL)
-  summary_plots <- lapply(list(p1, p2, p3, p4), function(p) {
-    p + scale_color_manual(values = tls_group_colors) + theme(legend.position = "none")
-  })
-  print(wrap_plots(summary_plots, ncol = 2) + plot_annotation(tag_levels = "a"))
+    labs(y = "Fraction of QC spots", x = NULL)
+  summary_strips <- c(TLS22 = "#DCE9F3", Imprint29 = "#DDEEEA",
+                      `Expression candidates` = "#F5E9DC", `AUCell coverage` = "#EDF2F6")
+  summary_plots <- Map(function(p, label, fill) {
+    p + facet_wrap(vars(!!label)) + scale_color_manual(values = tls_group_colors) +
+      theme(legend.position = "none",
+            strip.background = element_rect(fill = fill, color = "#526170", linewidth = 0.35))
+  }, list(p1, p2, p3, p4), names(summary_strips), unname(summary_strips))
+  print(wrap_plots(summary_plots, ncol = 2))
 }, finally = dev.off())
 results <- list(samples = samples, summary = summary_table, spots = spots, rois = rois,
                 members = members, expression_boundaries = boundaries, HE_polygons = HE_polygons,
@@ -988,18 +1001,22 @@ print(roi_evidence)
 # 本段可独立运行，沿用前半段的字体和配色。
 review_group_colors <- c(Vehicle = "#426B91", VG161 = "#C35B3F")
 review_expression_colors <- c("#EDF2F6", "#91AEC7", "#24537D")
-review_map_theme <- theme_void(base_size = 10, base_family = "Helvetica") +
+review_unavailable <- "#B8BDC3"
+review_strip_theme <- theme(strip.background = element_rect(fill = "#EDF2F6", color = NA),
+                            strip.text = element_text(face = "bold", size = 9, color = "#22313F", hjust = 0.5,
+                                                      margin = margin(3, 4, 3, 4)))
+review_map_theme <- theme_void(base_size = 10, base_family = "Helvetica") + review_strip_theme +
   theme(plot.title = element_text(face = "bold", size = 10, color = "#22313F"),
-        plot.caption = element_text(size = 8, color = "#526170", hjust = 0),
-        plot.tag = element_text(face = "bold", size = 11, color = "#22313F"),
         legend.title = element_text(size = 8), legend.text = element_text(size = 8),
         plot.margin = margin(6, 8, 6, 8))
-review_chart_theme <- theme_classic(base_size = 10, base_family = "Helvetica") +
+review_chart_theme <- theme_classic(base_size = 10, base_family = "Helvetica") + review_strip_theme +
   theme(plot.title = element_text(face = "bold", size = 10, color = "#22313F"),
-        plot.tag = element_text(face = "bold", size = 11, color = "#22313F"),
-        axis.line = element_line(linewidth = 0.35, color = "#526170"),
+        panel.border = element_rect(fill = NA, color = "#526170", linewidth = 0.35),
+        axis.line = element_blank(),
         axis.ticks = element_line(linewidth = 0.35, color = "#526170"),
+        strip.background = element_rect(fill = "#EDF2F6", color = "#526170", linewidth = 0.35),
         plot.margin = margin(8, 12, 8, 12))
+review_score_strips <- c(TLS22 = "#DCE9F3", Imprint29 = "#DDEEEA")
 review_marker_panels <- list(c("MS4A1", "CD79A", "CD3D", "TRBC2", "CCL19", "CXCL13"),
                              c("CR2", "FCER2", "AICDA", "BCL6", "MKI67", "SERPINA9"))
 marker_limits <- vapply(roi_context, function(ctx) {
@@ -1040,26 +1057,41 @@ review_view <- function(i) {
     p <- p + annotation_raster(as.raster(he), xmin=0, xmax=im$width/im$scale, ymin=-im$height/im$scale, ymax=0)
   } else p <- p + annotate("text", x=mean(limits$x), y=-mean(limits$y), label="H&E unavailable", size=3)
   bb <- tls$expression_boundaries[tls$expression_boundaries$sample_id == ctx$sample_id & tls$expression_boundaries$roi_id == ctx$roi_id, ]
-  p <- p + geom_segment(data=bb, aes(x=x, y=-y, xend=xend, yend=-yend), color="#BB521E", linewidth=0.5) +
-    geom_polygon(data=hp, aes(x,-y,group=polygon_id), fill=NA, color="#24537D", linewidth=0.5) +
-    coord_fixed(xlim=limits$x, ylim=-rev(limits$y), expand=FALSE) + review_map_theme +
-    labs(title=paste(ctx$roi_id, "H&E"))
+  p <- p + geom_segment(data = bb, aes(x = x, y = -y, xend = xend, yend = -yend,
+                                       color = "Expression candidate"), linewidth = 0.5) +
+    geom_polygon(data = hp, aes(x, -y, group = polygon_id, color = "H&E candidate"),
+                 fill = NA, linewidth = 0.5, key_glyph = "path") +
+    scale_color_manual(name = NULL, values = c(`Expression candidate` = "#BB521E", `H&E candidate` = "#24537D")) +
+    coord_fixed(xlim=limits$x, ylim=-rev(limits$y), expand=FALSE) +
+    facet_wrap(vars(!!paste(ctx$roi_id, "H&E"))) + review_map_theme
   list(plot=p, met=mm, limits=limits, core=ctx$core)
 }
-review_point_map <- function(m, view, title, upper, unit) {
-  m$core <- m$spot %in% view$core
-  ggplot(m, aes(x, -y)) + geom_point(aes(color = value, shape = core), size = 2.6, stroke = 0.5) +
-    scale_color_gradientn(colours = review_expression_colors, na.value = "#D2D5D9",
-                          limits = c(0, upper), name = unit) +
-    scale_shape_manual(values = c(`FALSE` = 1, `TRUE` = 16), guide = "none") +
+review_point_map <- function(m, view, title, upper, unit, unavailable = NULL) {
+  m$spot_role <- ifelse(m$spot %in% view$core, "ROI spot", "Nearby spot")
+  p <- ggplot(m, aes(x, -y)) +
     coord_fixed(xlim = view$limits$x, ylim = -rev(view$limits$y), expand = FALSE) +
-    review_map_theme + labs(title = title)
+    facet_wrap(vars(!!title)) + review_map_theme
+  if (!nrow(m)) return(p)
+  
+  shapes <- c(`ROI spot` = 16, `Nearby spot` = 1)
+  key_colors <- rep("#526170", length(shapes))
+  # 追加灰点图例，同时保留不可评分点的原有内外圈点形。
+  if (!is.null(unavailable)) {
+    shapes[unavailable] <- 16
+    key_colors <- c(key_colors, review_unavailable)
+  }
+  p + geom_point(aes(color = value, shape = spot_role), size = 2.6, stroke = 0.5,
+                 show.legend = c(shape = TRUE)) +
+    scale_color_gradientn(colours = review_expression_colors, na.value = review_unavailable,
+                          limits = c(0, upper), name = unit, guide = guide_colorbar(order = 1)) +
+    scale_shape_manual(name = NULL, values = shapes, limits = names(shapes),
+                       guide = guide_legend(order = 2, override.aes = list(colour = key_colors)))
 }
-review_marker_map <- function(i, gene, view) {
+review_marker_map <- function(i, gene, view, unavailable) {
   s <- roi_context[[i]]$sample_id; ct <- tls$marker_counts[[s]]; feature <- paste0(prefix, gene)
   m <- view$met
   m$value <- if (feature %in% rownames(ct) && nrow(m)) log1p(as.numeric(ct[feature,m$spot])/pmax(m$host_UMI,1)*1e4) else rep(NA_real_,nrow(m))
-  review_point_map(m, view, gene, review_marker_max, "log1p(CP10K)")
+  review_point_map(m, view, gene, review_marker_max, "log1p(CP10K)", unavailable)
 }
 pdf(file.path(review_dir, "review.pdf"), width = 9, height = 6, family = "Helvetica",
     useDingbats = FALSE, compress = TRUE)
@@ -1068,37 +1100,57 @@ tryCatch({
     v <- review_view(i)
     score_spots <- v$met
     score_spots$value <- score_spots$TLS22_AUC
-    p_score <- review_point_map(score_spots, v, "TLS22", review_auc_max, "AUC")
-    score_key <- if (!nrow(score_spots)) "No captured spots" else "Solid = ROI | Open = neighbors | Gray = unscored"
-    print(wrap_plots(v$plot, p_score, widths = c(1, 1)) +
-            plot_annotation(tag_levels = "a", caption = score_key))
+    score_unavailable <- if (anyNA(score_spots$value)) "Unscored" else NULL
+    p_score <- review_point_map(score_spots, v, "TLS22", review_auc_max, "AUC", score_unavailable)
+    if (!nrow(score_spots)) p_score <- p_score +
+      annotate("text", x = mean(v$limits$x), y = -mean(v$limits$y), label = "No captured spots", size = 3)
+    print(wrap_plots(v$plot, p_score, widths = c(1, 1)))
+    available_features <- rownames(tls$marker_counts[[roi_context[[i]]$sample_id]])
     for (genes in review_marker_panels) {
-      maps <- lapply(genes, function(gene) review_marker_map(i, gene, v))
-      for (j in seq_len(length(maps) - 1L)) maps[[j]] <- maps[[j]] + theme(legend.position = "none")
-      print(wrap_plots(maps, ncol = 3) +
-              plot_annotation(title = paste(tls_rois$roi_id[i], "markers"), tag_levels = "a",
-                              caption = "Solid = ROI | Open = neighbors | Gray = unavailable"))
+      marker_unavailable <- if (any(!paste0(prefix, genes) %in% available_features)) "Gene unavailable" else NULL
+      maps <- lapply(genes, function(gene) review_marker_map(i, gene, v, marker_unavailable))
+      marker_page <- wrap_plots(lapply(maps, function(p) p + theme(legend.position = "none")), ncol = 3)
+      if (nrow(v$met)) {
+        # 整组marker共用一份图例，放在网格旁而不是某一张小图旁。
+        guide_plot <- ggplotGrob(maps[[1L]])
+        guide_box <- guide_plot$grobs[[which(guide_plot$layout$name %in% c("guide-box-right", "guide-box"))]]
+        marker_page <- wrap_plots(marker_page, wrap_elements(full = guide_box), widths = c(1, 0.18))
+      }
+      print(marker_page + plot_annotation(title = paste(tls_rois$roi_id[i], "markers")))
     }
     comp <- composition[composition$roi_id == tls_rois$roi_id[i], ]
     pp <- lapply(c("TLS22","Imprint29"),function(panel) {
       d <- comp[comp$panel==panel, ]; d <- head(d[order(d$raw_UMI,decreasing=TRUE), ],10)
       d$gene <- factor(d$gene,levels=rev(d$gene))
       ggplot(d, aes(raw_UMI, gene)) + geom_col(fill = "#426B91", width = 0.7) + review_chart_theme +
+        facet_wrap(vars(!!panel)) +
+        theme(strip.background = element_rect(fill = review_score_strips[[panel]], color = "#526170", linewidth = 0.35)) +
         scale_x_continuous(expand = expansion(mult = c(0, 0.08))) +
-        labs(title = panel, x = "Core UMI", y = NULL)
+        labs(x = "Core UMI", y = NULL)
     })
-    print(wrap_plots(pp, ncol = 2) + plot_annotation(title = paste(tls_rois$roi_id[i], "marker counts"), tag_levels = "a"))
+    print(wrap_plots(pp, ncol = 2) + plot_annotation(title = paste(tls_rois$roi_id[i], "marker counts")))
   }
   dd <- bind_rows(data.frame(sample_id=final_summary$sample_id,method="Unadjusted",value=final_summary$TLS22_AUC_mean),
                   data.frame(sample_id=final_summary$sample_id,method="Common depth strata",value=final_summary$TLS22_AUC_depth_standardized))
   dd <- left_join(dd,tls$samples[,c("sample_id","treatment")],by="sample_id")
   dd$treatment <- factor(dd$treatment,levels=c("Vehicle","VG161"))
+  # 两组共用的方法图例放在右下空白处。
+  score_legend_position <- c(0.98, 0.05)
+  score_legend <- if (packageVersion("ggplot2") >= "3.5.0") {
+    theme(legend.position = "inside", legend.position.inside = score_legend_position)
+  } else {
+    theme(legend.position = score_legend_position)
+  }
   score_panel <- ggplot(dd, aes(treatment, value, color = treatment, shape = method, group = method)) +
     geom_point(size = 3.1, stroke = 0.85, position = position_dodge(width = 0.24)) +
     scale_color_manual(values = review_group_colors, guide = "none") +
-    scale_shape_manual(values = c(Unadjusted = 16, `Common depth strata` = 1)) +
-    review_chart_theme + theme(legend.position = "top") +
-    labs(title = "TLS22 scores", x = NULL, y = "Mean AUC", shape = NULL)
+    scale_shape_manual(values = c(Unadjusted = 16, `Common depth strata` = 1),
+                       guide = guide_legend(override.aes = list(colour = "#526170"))) +
+    facet_wrap(vars("TLS22 scores")) + review_chart_theme + score_legend +
+    theme(legend.justification = c(1, 0), legend.direction = "vertical",
+          legend.background = element_blank(), legend.text = element_text(size = 8),
+          strip.background = element_rect(fill = review_score_strips[["TLS22"]], color = "#526170", linewidth = 0.35)) +
+    labs(x = NULL, y = "Mean AUC", shape = NULL)
   status <- final_summary[,c("sample_id","n_union_candidate_ROI","TLS_review_complete","n_TLS_supported_whole_section")]
   status_table <- data.frame(Sample = status$sample_id, Candidates = as.character(status$n_union_candidate_ROI),
                              Review = ifelse(status$TLS_review_complete, "Complete", "Pending"),
@@ -1112,7 +1164,7 @@ tryCatch({
     scale_x_discrete(position = "top") + review_map_theme +
     theme(axis.text.x = element_text(face = "bold", size = 9, color = "#22313F", margin = margin(b = 4))) +
     labs(title = "TLS review")
-  print(wrap_plots(score_panel, review_panel, ncol = 1, heights = c(2.4, 1)) + plot_annotation(tag_levels = "a"))
+  print(wrap_plots(score_panel, review_panel, ncol = 1, heights = c(2.4, 1)))
 },finally=dev.off())
 
 ##### 沿用原结果：只新增review.csv和review.pdf #####
