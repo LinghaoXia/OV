@@ -367,14 +367,15 @@ library(Seurat)
 library(Matrix)
 library(ggplot2)
 library(patchwork)
-# scRNAtoolVis存在且兼容时优先沿用jjDotPlot；否则用同口径ggplot2绘制。
+# 优先使用当前会话中的jjDotPlot自定义函数；其次才查找scRNAtoolVis。
+# 两者不可用时使用脚本内的ggplot2绘图。
 
 ##### 路径与绘图参数 #####
 cluster_col <- "opt_clust_integrated"
 sample_col <- "orig.ident"
 marker_assay <- "RNA"
 marker_reduction <- "umap"
-marker_dot_engine <- "jjDotPlot" # 也可显式设为"ggplot2"，不需安装scRNAtoolVis。
+marker_dot_engine <- "jjDotPlot" # 优先调用环境中已有的同名函数；也可设为"ggplot2"。
 marker_show_tree <- FALSE       # 默认所有模块固定cluster顺序；TRUE时jj按各模块重排树序。
 marker_feature_per_page <- 9L
 marker_feature_ncol <- 3L
@@ -539,21 +540,48 @@ marker_dot_ggplot <- function(groups, title) {
   if (nrow(missing) || nrow(constant)) p <- p + scale_shape_manual(values = c("Not measured" = 4, "z score NA" = 21), name = "Status")
   p
 }
-marker_build_jj <- function(groups, title) {
+marker_find_jj <- function() {
+  if (exists("jjDotPlot", mode = "function", inherits = TRUE)) {
+    return(list(fun = get("jjDotPlot", mode = "function", inherits = TRUE), source = "session::jjDotPlot"))
+  }
+  if (requireNamespace("scRNAtoolVis", quietly = TRUE)) {
+    return(list(fun = getExportedValue("scRNAtoolVis", "jjDotPlot"), source = "scRNAtoolVis::jjDotPlot"))
+  }
+  list(fun = NULL, source = "unavailable")
+}
+marker_build_jj <- function(groups, title, jj = marker_find_jj()) {
   # jjAnno内部可能print；在空设备中构造，避免同一张图在目标PDF中重复。
+  marker_previous_device <- grDevices::dev.cur()
   grDevices::pdf(NULL, width = 12, height = 9)
   marker_build_device <- grDevices::dev.cur()
-  on.exit(grDevices::dev.off(which = marker_build_device), add = TRUE)
+  on.exit({
+    if (marker_build_device %in% grDevices::dev.list()) grDevices::dev.off(which = marker_build_device)
+    # dev.off选择的是下一个设备，不能假定会自动回到刚才的PDF。
+    if (marker_previous_device %in% grDevices::dev.list()) invisible(grDevices::dev.set(marker_previous_device))
+  }, add = TRUE)
   z <- markers_plot[markers_plot$cluster %in% groups, , drop = FALSE]
   z <- z[order(match(z$cluster, groups)), , drop = FALSE]
   z$cluster <- factor(z$cluster, levels = groups)
-  p <- scRNAtoolVis::jjDotPlot(object = marker_sce, assay = marker_assay, slot = "data",
-                               markerGene = z, anno = TRUE, id = cluster_col, gene.order = z$gene,
-                               cluster.order = rev(marker_cluster_levels), ytree = marker_show_tree, xtree = FALSE,
-                               tree.pos = "right", textSize = 11, base_size = 11, dot.min = 0, dot.max = 5,
-                               dot.col = marker_z_colors, midpoint = 0, scale = TRUE,
-                               bar.legendTitle = "Mean expression\nz score", point.legendTitle = "Detected (%)",
-                               col.min = marker_z_limits[1], col.max = marker_z_limits[2], plot.margin = c(2.8, 0.4, 0.4, 0.4))
+  if (!is.function(jj$fun)) stop("当前会话或可用包中没有jjDotPlot。")
+  args <- list(object = marker_sce, assay = marker_assay, slot = "data",
+               markerGene = z, anno = TRUE, id = cluster_col, gene.order = z$gene,
+               cluster.order = rev(marker_cluster_levels), ytree = marker_show_tree, xtree = FALSE,
+               tree.pos = "right", textSize = 11, base_size = 11, dot.min = 0, dot.max = 5,
+               dot.col = marker_z_colors, midpoint = 0, scale = TRUE,
+               bar.legendTitle = "Mean expression\nz score", point.legendTitle = "Detected (%)",
+               col.min = marker_z_limits[1], col.max = marker_z_limits[2], plot.margin = c(2.8, 0.4, 0.4, 0.4))
+  # 保留用户原调用支持的核心参数；新增选项仅在函数明确声明时传入，
+  # 避免自定义函数的...把不认识的选项继续传给注释函数。
+  core_args <- c("object", "markerGene", "anno", "id", "ytree", "tree.pos", "textSize", "base_size", "plot.margin")
+  declared <- names(formals(jj$fun))
+  allowed <- if ("..." %in% declared) union(core_args, declared) else declared
+  args <- args[names(args) %in% allowed]
+  p <- do.call(jj$fun, args)
+  if (!inherits(p, c("ggplot", "patchwork"))) stop("jjDotPlot没有返回ggplot对象；请在自定义函数末尾return(p)。")
+  if (jj$source == "session::jjDotPlot") {
+    # 自定义函数的统计、色标和图例由其实现决定，不静默替换成包版本。
+    return(p + labs(title = NULL))
+  }
   suppressMessages(p + marker_dot_scale() +
                      scale_size_continuous(range = c(0, 5), limits = c(0, 100), breaks = c(0, 25, 50, 75, 100), name = "Detected (%)") +
                      guides(fill = guide_colorbar(direction = "vertical", barheight = grid::unit(3, "cm"), barwidth = grid::unit(0.35, "cm"))) +
@@ -578,12 +606,23 @@ marker_placeholder <- function(gene) {
 dir.create(marker_outdir, recursive = TRUE, showWarnings = FALSE)
 marker_panel_audit <- list()
 marker_write_pdf <- function() {
+  marker_previous_device <- grDevices::dev.cur()
   grDevices::pdf(file.path(marker_outdir, "plots.pdf"), width = 12, height = 9, onefile = TRUE, useDingbats = FALSE)
   marker_output_device <- grDevices::dev.cur()
-  on.exit(grDevices::dev.off(which = marker_output_device), add = TRUE)
-  print(DimPlot(marker_sce, reduction = marker_reduction, group.by = cluster_col,
-                label = TRUE, repel = TRUE, raster = marker_raster, pt.size = marker_point_size) +
-          labs(title = "T cell clusters") + theme_classic(base_size = 12) + NoLegend())
+  on.exit({
+    if (marker_output_device %in% grDevices::dev.list()) grDevices::dev.off(which = marker_output_device)
+    if (marker_previous_device %in% grDevices::dev.list()) invisible(grDevices::dev.set(marker_previous_device))
+  }, add = TRUE)
+  marker_page_count <- 0L
+  marker_print_page <- function(p) {
+    if (!marker_output_device %in% grDevices::dev.list()) stop("目标PDF设备已被其他函数关闭，停止输出以免页面写到别处。")
+    invisible(grDevices::dev.set(marker_output_device))
+    print(p)
+    marker_page_count <<- marker_page_count + 1L
+  }
+  marker_print_page(DimPlot(marker_sce, reduction = marker_reduction, group.by = cluster_col,
+                            label = TRUE, repel = TRUE, raster = marker_raster, pt.size = marker_point_size) +
+                      labs(title = "T cell clusters") + theme_classic(base_size = 12) + NoLegend())
   for (title in names(marker_panels)) {
     groups <- marker_panels[[title]]
     genes <- markers_plot$gene[markers_plot$cluster %in% groups]
@@ -591,16 +630,18 @@ marker_write_pdf <- function() {
     suitable <- all(is.finite(z$dot_z)) && length(marker_cluster_levels) >= 2L
     reason <- "requested ggplot2"
     p <- NULL
-    if (marker_dot_engine == "jjDotPlot" && suitable && requireNamespace("scRNAtoolVis", quietly = TRUE)) {
-      p <- tryCatch(marker_build_jj(groups, title), error = function(e) {
+    jj <- if (marker_dot_engine == "jjDotPlot") marker_find_jj() else list(fun = NULL, source = "not requested")
+    if (marker_dot_engine == "jjDotPlot" && suitable && is.function(jj$fun)) {
+      p <- tryCatch(marker_build_jj(groups, title, jj = jj), error = function(e) {
         reason <<- paste("jjDotPlot failed:", conditionMessage(e)); NULL
       })
-    } else if (marker_dot_engine == "jjDotPlot") reason <- if (!suitable) "missing or constant marker; explicit NA display" else "scRNAtoolVis unavailable"
+    } else if (marker_dot_engine == "jjDotPlot") reason <- if (!suitable) "missing or constant marker; explicit NA display" else "jjDotPlot unavailable"
     used <- if (is.null(p)) "ggplot2" else "jjDotPlot"
     if (is.null(p)) p <- marker_dot_ggplot(groups, title)
-    marker_panel_audit[[title]] <<- data.frame(panel = title, engine = used, status = if (used == "jjDotPlot") "ok" else reason)
-    if (used != marker_dot_engine) message(title, "：", reason, "；使用同口径ggplot2。")
-    print(wrap_plots(list(p), ncol = 1) + plot_annotation(title = title))
+    marker_panel_audit[[title]] <<- data.frame(panel = title, engine = used,
+                                               function_source = if (used == "jjDotPlot") jj$source else "internal ggplot2", status = if (used == "jjDotPlot") "ok" else reason)
+    if (used != marker_dot_engine) message(title, "：", reason, "；使用内置ggplot2。")
+    marker_print_page(wrap_plots(list(p), ncol = 1) + plot_annotation(title = title))
   }
   pages <- split(markers, ceiling(seq_along(markers) / marker_feature_per_page))
   for (page in seq_along(pages)) {
@@ -620,8 +661,11 @@ marker_write_pdf <- function() {
       }
       marker_strip(p, g)
     })
-    print(wrap_plots(shown, ncol = marker_feature_ncol) + plot_annotation(title = "T cell markers"))
+    marker_print_page(wrap_plots(shown, ncol = marker_feature_ncol) + plot_annotation(title = "T cell markers"))
   }
+  marker_expected_pages <- 1L + length(marker_panels) + length(pages)
+  if (marker_page_count != marker_expected_pages) stop("PDF输出页数未达到本次计划页数。")
+  message("PDF页面已写入目标设备：", marker_page_count, " / ", marker_expected_pages)
 }
 marker_write_pdf()
 
@@ -643,9 +687,8 @@ marker_info <- capture.output({
   print(marker_status[marker_status$feature_status != "measured", ], row.names = FALSE)
   cat("Cells by sample and cluster:\n"); print(table(marker_samples, marker_cluster_id))
   print(vapply(c("Seurat", "SeuratObject", "Matrix", "ggplot2", "patchwork"), function(p) as.character(packageVersion(p)), character(1)))
-  if (requireNamespace("scRNAtoolVis", quietly = TRUE)) cat("scRNAtoolVis:", as.character(packageVersion("scRNAtoolVis")), "\n")
+  if (any(marker_panel_audit$function_source == "scRNAtoolVis::jjDotPlot")) cat("scRNAtoolVis:", as.character(packageVersion("scRNAtoolVis")), "\n")
   print(sessionInfo())
 })
 writeLines(marker_info, file.path(marker_outdir, "info.txt"), useBytes = TRUE)
 message("完成：", marker_outdir, "；请将plots.pdf发回，并保留summary.csv/info.txt供核对。")
-
