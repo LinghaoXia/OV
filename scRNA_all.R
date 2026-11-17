@@ -429,9 +429,9 @@ dev.off()
 ###### annotation ######
 groups <- list(
   Epithelial = c("13","10","7","4","6","3","12","1"),
-  Myeloid    = c("0","9"),
+  Myeloid    = c("0","9","18"),
   Tcell      = c("8"),
-  Fibroblast = c("16","11","15","18","19","14","21","5","2"),
+  Fibroblast = c("16","11","15","19","14","21","5","2"),
   Mast       = c("20"),
   Other      = c("17")
 )
