@@ -32,22 +32,9 @@ host_prefix <- ""
 viral_pattern <- "^(VG161|HSV[-_]?1)([-_.]|$)"
 viral_feature_ids <- character() # 无前缀病毒/载荷feature按真实参考注释补入。
 
-# 可选：只读取已有细分注释，不重新聚类、不按单个marker猜CD8身份。
-tcell_annotation_file <- "~/rawdata/scRNA_virus/virus_3D/virus_3D_tcell.RData"
-tcell_annotation_object <- "sce"
-# 仅恢复用户确认的D3、RNA_snn_res.0.8旧注释；换数据/分辨率须关闭或重新核对映射。
-# 不重新聚类，不使用Idents或最后一次seurat_clusters猜分群。
-restore_tcell_annotation <- TRUE
-tcell_cluster_col <- "opt_clust_integrated"
-tcell_type_map <- c("0" = "CD4+ Tcell", "1" = "other Tcell", "2" = "other Tcell",
-  "3" = "CD8+ Tcell", "4" = "CD8+ Tcell", "5" = "other Tcell", "6" = "CD8+ Tcell",
-  "7" = "CD8+ Tcell", "8" = "CD8+ Tcell", "9" = "other Tcell", "10" = "CD4+ Tcell")
-tcell_function_map <- c("0" = "naive Tcell", "1" = "naive Tcell", "2" = "naive Tcell",
-  "3" = "effector Tcell", "4" = "effector Tcell", "5" = "memory Tcell", "6" = "effector Tcell",
-  "7" = "memory Tcell", "8" = "naive Tcell", "9" = "memory Tcell", "10" = "memory Tcell")
+# 本轮只使用主对象的大类注释，不读取T细分文件，也不使用t_type/t_function或cluster映射。
 receiver_definitions <- list(
   Tcell = list(parent = "Tcell", column = celltype_col, labels = "Tcell", lineage = "T"),
-  CD8_T = list(parent = "Tcell", column = "t_type", labels = "CD8+ Tcell", lineage = "T"),
   Myeloid = list(parent = "Myeloid", column = celltype_col, labels = "Myeloid", lineage = "Myeloid"))
 tumor_labels <- "Epithelial"
 # 肿瘤发送端状态比较：只使用VG161动物内肿瘤细胞自身的已有标签。
@@ -82,7 +69,7 @@ seed <- 123L
 top_ligands_plot <- 15L
 top_ligands_links <- 10L
 top_target_links <- 20L
-show_replicate_points <- TRUE       # 两组均值条形上叠加生物重复点，横轴不拆样本1/2。
+show_replicate_points <- TRUE       # 仅用于计数/检测比例等动物汇总条形；小提琴不叠加样本均值。
 show_sample_rank_diagnostics <- FALSE # 逐样本排名保留在表中，主PDF默认只放组间模型排名。
 condition_colors <- c(Vehicle = "#426B91", VG161 = "#C35B3F")
 
@@ -143,91 +130,14 @@ meta <- meta[!is.na(meta[[sample_col]]) & meta[[sample_col]] %in% sample_table$s
 meta$sample_id <- as.character(meta[[sample_col]])
 meta$replicate_id <- sample_table$replicate_id[match(meta$sample_id, sample_table$sample_id)]
 meta$condition <- factor(sample_table$condition[match(meta$sample_id, sample_table$sample_id)], levels = condition_levels)
-annotation_audit <- list(status = "not_used", file = path.expand(tcell_annotation_file),
-  restore_from_cluster = restore_tcell_annotation, cluster_column = tcell_cluster_col,
-  mapping_scope = "user-confirmed D3 RNA_snn_res.0.8 only", fields = list())
+annotation_audit <- list(status = "broad_celltypes_only", source_column = celltype_col,
+                         receivers = names(receiver_definitions), subtype_fields_used = character(),
+                         note = "No T-cell subtype object is loaded; existing subtype fields are ignored.")
 tcell_cells <- rownames(meta)[!is.na(meta[[celltype_col]]) & meta[[celltype_col]] == "Tcell"]
 annotation_table <- data.frame(cell = tcell_cells, sample_id = meta[tcell_cells, "sample_id"],
-  matched_annotation = rep(FALSE, length(tcell_cells)), cluster = rep(NA_character_, length(tcell_cells)),
-  t_type = rep(NA_character_, length(tcell_cells)), t_function = rep(NA_character_, length(tcell_cells)),
-  t_type_source = rep("unresolved", length(tcell_cells)), t_function_source = rep("unresolved", length(tcell_cells)),
-  stringsAsFactors = FALSE)
-annotation_maps <- list(t_type = tcell_type_map, t_function = tcell_function_map)
-for (field in names(annotation_maps)) {
-  map <- annotation_maps[[field]]
-  if (is.null(names(map)) || anyNA(names(map)) || any(!nzchar(names(map))) || anyDuplicated(names(map)) ||
-      anyNA(map) || any(!nzchar(trimws(map)))) stop("T注释映射的cluster名称/标签缺失或重复：", field)
-  if (field %in% names(meta)) {
-    existing <- as.character(meta[tcell_cells, field])
-    missing <- is.na(existing) | !nzchar(trimws(existing))
-    if (any(!missing & !existing %in% unique(map))) stop("主对象含未认可的T注释标签：", field)
-    annotation_table[[field]] <- existing
-    annotation_table[[paste0(field, "_source")]][!missing] <- "main_existing"
-  }
-}
-if (nzchar(tcell_annotation_file) && file.exists(path.expand(tcell_annotation_file))) {
-  t_sce <- read_sce(tcell_annotation_file, tcell_annotation_object)
-  if (!inherits(t_sce, "Seurat")) stop("T细分对象不是Seurat。")
-  tm <- t_sce[[]]
-  if (is.null(rownames(tm)) || anyNA(rownames(tm)) || anyDuplicated(rownames(tm))) stop("T细分对象条码缺失或重复。")
-  matched <- intersect(rownames(tm), tcell_cells)
-  if (!length(matched)) stop("现有T细分对象与本次Tcell没有共同条码；不能跨D3/D5或改猜条码。")
-  if (!sample_col %in% names(tm)) stop("T细分对象缺少样本字段：", sample_col)
-  source_samples <- as.character(tm[matched, sample_col])
-  if (anyNA(source_samples) || any(source_samples != meta[matched, "sample_id"])) stop("T细分对象的样本身份与主对象不一致。")
-  if (celltype_col %in% names(tm) && any(is.na(tm[matched, celltype_col]) | as.character(tm[matched, celltype_col]) != "Tcell")) stop("T细分对象共同条码的主细胞类型不是Tcell。")
-  ix <- match(matched, annotation_table$cell)
-  annotation_table$matched_annotation[ix] <- TRUE
-  cluster_present <- tcell_cluster_col %in% names(tm)
-  cluster <- if (cluster_present) as.character(tm[matched, tcell_cluster_col]) else rep(NA_character_, length(matched))
-  cluster_missing <- is.na(cluster) | !nzchar(trimws(cluster))
-  annotation_table$cluster[ix] <- cluster
-  for (field in names(annotation_maps)) {
-    map <- annotation_maps[[field]]
-    old <- if (field %in% names(meta)) as.character(meta[matched, field]) else rep(NA_character_, length(matched))
-    supplied <- if (field %in% names(tm)) as.character(tm[matched, field]) else rep(NA_character_, length(matched))
-    old_missing <- is.na(old) | !nzchar(trimws(old))
-    supplied_missing <- is.na(supplied) | !nzchar(trimws(supplied))
-    if (any(!supplied_missing & !supplied %in% unique(map))) stop("T细分对象含未认可的注释标签：", field)
-    if (any(!old_missing & !supplied_missing & old != supplied)) stop("主对象和T细分对象的", field, "冲突。")
-    resolved <- old
-    resolved[old_missing] <- NA_character_
-    origin <- ifelse(old_missing, "unresolved", "main_existing")
-    take_supplied <- old_missing & !supplied_missing
-    resolved[take_supplied] <- supplied[take_supplied]
-    origin[take_supplied] <- "annotation_existing"
-    needs_restore <- is.na(resolved)
-    restored <- rep(FALSE, length(matched))
-    if (restore_tcell_annotation && cluster_present) {
-      unknown <- unique(cluster[!cluster_missing & !cluster %in% names(map)])
-      if (length(unknown)) stop("T细分对象出现旧映射未知cluster：", paste(unknown, collapse = ", "))
-      if (any(needs_restore & cluster_missing)) stop("需要恢复", field, "的细胞缺少", tcell_cluster_col, "值；不能猜注释。")
-      expected <- unname(map[cluster]) # 必须按字符cluster名称索引，不能按factor内部编码。
-      if (any(!is.na(resolved) & !is.na(expected) & resolved != expected)) stop("已有", field, "与用户确认的D3 cluster映射冲突。")
-      restored <- needs_restore & !is.na(expected)
-      resolved[restored] <- expected[restored]
-      origin[restored] <- "restored_user_cluster_map"
-    }
-    # 缺cluster列且没有已有标签时保留NA/broad T；不新增全空t_type伪装为已有注释。
-    if (field %in% names(meta) || any(!is.na(resolved))) {
-      if (!field %in% names(meta)) meta[[field]] <- NA_character_ else meta[[field]] <- as.character(meta[[field]])
-      meta[matched, field] <- resolved
-    }
-    annotation_table[[field]][ix] <- resolved
-    annotation_table[[paste0(field, "_source")]][ix] <- origin
-    annotation_audit$fields[[field]] <- list(n_main_preserved = sum(!old_missing),
-      n_joined_existing = sum(take_supplied), n_restored = sum(restored), n_unresolved = sum(is.na(resolved)),
-      labels = table(resolved, useNA = "ifany"), mapping = map)
-  }
-  annotation_audit$n_matched <- length(matched)
-  annotation_audit$n_unmatched_Tcell <- length(setdiff(tcell_cells, matched))
-  annotation_audit$cluster_present <- cluster_present
-  annotation_audit$status <- if (any(annotation_table$t_type_source == "restored_user_cluster_map")) "restored_user_D3_cluster_map" else
-    if (any(!is.na(annotation_table$t_type) & nzchar(annotation_table$t_type))) "joined_existing_t_type" else "file_has_no_t_type_broad_T_only"
-  annotation_audit$labels <- table(annotation_table$t_type, useNA = "ifany")
-  rm(t_sce, tm)
-} else annotation_audit$status <- "file_absent_broad_T_only"
-message("T细分注释：", annotation_audit$status, "；仅沿用已有标签或用户确认的D3旧cluster映射，不重聚类。")
+                               receiver = rep("Tcell", length(tcell_cells)), annotation_source = rep(celltype_col, length(tcell_cells)),
+                               stringsAsFactors = FALSE)
+message("本轮使用总体Tcell/Myeloid，不读取T细分对象或旧cluster映射。")
 print(table(meta$sample_id, meta[[celltype_col]], useNA = "ifany"))
 
 ##### 提取原始宿主counts：病毒排除与共同测量背景 #####
@@ -296,12 +206,12 @@ for (receiver in names(receiver_definitions)) {
   receiver_cells[[receiver]] <- cells
   n <- vapply(replicate_table$replicate_id, function(id) sum(meta[cells, "replicate_id"] == id), integer(1))
   receiver_audit[[receiver]] <- data.frame(receiver = receiver, replicate_table, n_cells = n,
-    passes_qc = n >= min_cells, annotation_status = if (present) "existing_label" else "annotation_column_absent", row.names = NULL)
+                                           passes_qc = n >= min_cells, annotation_status = if (present) "existing_label" else "annotation_column_absent", row.names = NULL)
 }
 receiver_audit <- do.call(rbind, receiver_audit)
 
-##### 第一阶段：逐细胞功能评分，按独立样本汇总 #####
-score_rows <- list(); coverage_rows <- list(); signature_expression_rows <- list()
+##### 第一阶段：逐细胞功能评分用于合并展示，动物汇总保留用于比较 #####
+score_rows <- list(); cell_score_rows <- list(); coverage_rows <- list(); signature_expression_rows <- list()
 for (receiver in names(receiver_cells)) {
   cells <- receiver_cells[[receiver]]
   spec <- receiver_definitions[[receiver]]
@@ -309,7 +219,7 @@ for (receiver in names(receiver_cells)) {
   sg <- lapply(signatures[nms], function(g) setdiff(unique(g), target_exclusion_genes))
   measured <- lapply(sg, intersect, y = rownames(host_counts))
   coverage <- data.frame(receiver = receiver, signature = names(sg), n_defined = lengths(sg),
-    n_measured = lengths(measured), coverage = lengths(measured) / lengths(sg), stringsAsFactors = FALSE)
+                         n_measured = lengths(measured), coverage = lengths(measured) / lengths(sg), stringsAsFactors = FALSE)
   coverage$assessable <- coverage$n_measured >= min_signature_genes & coverage$coverage >= min_signature_coverage
   coverage$missing_genes <- vapply(names(sg), function(nm) paste(setdiff(sg[[nm]], measured[[nm]]), collapse = ";"), character(1))
   coverage_rows[[receiver]] <- coverage
@@ -317,7 +227,7 @@ for (receiver in names(receiver_cells)) {
   scores <- NULL
   if (length(cells) && length(ok)) {
     scores <- UCell::ScoreSignatures_UCell(host_counts[, cells, drop = FALSE], features = measured[ok],
-      maxRank = min(ucell_max_rank, nrow(host_counts)), ncores = 1, BPPARAM = SerialParam())
+                                           maxRank = min(ucell_max_rank, nrow(host_counts)), ncores = 1, BPPARAM = SerialParam())
     if (!all(cells %in% rownames(scores))) stop("UCell输出细胞条码不完整。")
   }
   for (id in replicate_table$replicate_id) for (nm in nms) {
@@ -326,20 +236,31 @@ for (receiver in names(receiver_cells)) {
     assessable <- nm %in% ok
     val <- if (enough && assessable) scores[cc, paste0(nm, "_UCell")] else NA_real_
     score_rows[[length(score_rows) + 1L]] <- data.frame(receiver = receiver, replicate_id = id,
-      condition = as.character(replicate_table[id, "condition"]), signature = nm, n_cells = length(cc),
-      mean_score = if (enough && assessable) mean(val) else NA_real_,
-      median_score = if (enough && assessable) median(val) else NA_real_,
-      status = if (!enough) "insufficient_cells" else if (!assessable) "insufficient_signature_coverage" else "assessed")
+                                                        condition = as.character(replicate_table[id, "condition"]), signature = nm, n_cells = length(cc),
+                                                        mean_score = if (enough && assessable) mean(val) else NA_real_,
+                                                        median_score = if (enough && assessable) median(val) else NA_real_,
+                                                        status = if (!enough) "insufficient_cells" else if (!assessable) "insufficient_signature_coverage" else "assessed")
+    if (length(cc)) cell_score_rows[[length(cell_score_rows) + 1L]] <- data.frame(
+      receiver = receiver, cell = cc, sample_id = meta[cc, "sample_id"], replicate_id = id,
+      condition = as.character(replicate_table[id, "condition"]), signature = nm,
+      score = if (enough && assessable) as.numeric(val) else rep(NA_real_, length(cc)),
+      status = if (!enough) "insufficient_cells" else if (!assessable) "insufficient_signature_coverage" else "assessed",
+      stringsAsFactors = FALSE)
     for (g in sg[[nm]]) {
       present <- g %in% rownames(host_counts)
       signature_expression_rows[[length(signature_expression_rows) + 1L]] <- data.frame(receiver = receiver,
-        replicate_id = id, signature = nm, gene = g, n_cells = length(cc), feature_measured = present,
-        total_UMI = if (present && length(cc)) sum(host_counts[g, cc]) else NA_real_,
-        detected_fraction = if (present && length(cc)) mean(host_counts[g, cc] > 0) else NA_real_)
+                                                                                        replicate_id = id, signature = nm, gene = g, n_cells = length(cc), feature_measured = present,
+                                                                                        total_UMI = if (present && length(cc)) sum(host_counts[g, cc]) else NA_real_,
+                                                                                        detected_fraction = if (present && length(cc)) mean(host_counts[g, cc] > 0) else NA_real_)
     }
   }
 }
 scores_summary <- do.call(rbind, score_rows)
+cell_scores <- bind_rows_base(cell_score_rows)
+if (!nrow(cell_scores)) cell_scores <- data.frame(receiver = character(), cell = character(),
+                                                  sample_id = character(), replicate_id = character(), condition = character(), signature = character(),
+                                                  score = double(), status = character())
+rm(cell_score_rows)
 signature_coverage <- do.call(rbind, coverage_rows)
 signature_expression <- bind_rows_base(signature_expression_rows)
 score_contrasts <- bind_rows_base(lapply(split(scores_summary, interaction(scores_summary$receiver, scores_summary$signature, drop = TRUE)), function(z) {
@@ -347,9 +268,14 @@ score_contrasts <- bind_rows_base(lapply(split(scores_summary, interaction(score
   b <- z$mean_score[z$condition == "VG161" & is.finite(z$mean_score)]
   enough <- length(a) >= min_samples_per_condition && length(b) >= min_samples_per_condition
   data.frame(receiver = z$receiver[1], signature = z$signature[1], n_Vehicle = length(a), n_VG161 = length(b),
-    mean_Vehicle = if (length(a)) mean(a) else NA_real_, mean_VG161 = if (length(b)) mean(b) else NA_real_,
-    difference_VG161_minus_Vehicle = if (enough) mean(b) - mean(a) else NA_real_,
-    PValue = NA_real_, status = if (enough) "descriptive_no_test" else "insufficient_samples")
+             mean_Vehicle = if (length(a)) mean(a) else NA_real_, mean_VG161 = if (length(b)) mean(b) else NA_real_,
+             SD_Vehicle = if (length(a) >= 2L) sd(a) else NA_real_, SD_VG161 = if (length(b) >= 2L) sd(b) else NA_real_,
+             min_Vehicle = if (length(a)) min(a) else NA_real_, max_Vehicle = if (length(a)) max(a) else NA_real_,
+             min_VG161 = if (length(b)) min(b) else NA_real_, max_VG161 = if (length(b)) max(b) else NA_real_,
+             difference_VG161_minus_Vehicle = if (enough) mean(b) - mean(a) else NA_real_,
+             range_relation = if (!enough) "insufficient_samples" else if (min(b) > max(a)) "VG161_above_all_Vehicle" else
+               if (max(b) < min(a)) "VG161_below_all_Vehicle" else "overlap_or_equal",
+             PValue = NA_real_, status = if (enough) "descriptive_no_test" else "insufficient_samples")
 }))
 
 ##### 接收细胞pseudobulk与独立组edgeR：建立完整响应背景 #####
@@ -389,14 +315,14 @@ for (receiver in names(receiver_cells)) {
   de <- de[is.finite(de$rank_stat) & is.finite(de$logFC), , drop = FALSE]
   de_results[[receiver]] <- de
   de_models[[receiver]] <- list(pseudobulk = pb, samples = mm, design = design,
-    normalization = y$samples, logCPM = cpm(y, log = TRUE, prior.count = 2), tested_genes = de$gene)
+                                normalization = y$samples, logCPM = cpm(y, log = TRUE, prior.count = 2), tested_genes = de$gene)
   de_audit[[receiver]] <- data.frame(receiver = receiver, status = status, n_Vehicle = sum(mm$condition == "Vehicle"), n_VG161 = sum(mm$condition == "VG161"))
 }
 de_audit <- do.call(rbind, de_audit)
 
 ##### 肿瘤发送端：同鼠Infected与Bystander，独立于免疫接收端响应 #####
 sender_audit <- list(status = "disabled", state_column = sender_state_col,
-  contrast = "Infected - Bystander", source = tumor_labels)
+                     contrast = "Infected - Bystander", source = tumor_labels)
 sender_state_cells <- list(); sender_DE <- data.frame(); sender_model <- list()
 sender_state_counts <- data.frame(); sender_expression <- data.frame()
 if (run_sender_state) {
@@ -411,7 +337,7 @@ if (run_sender_state) {
   sender_state_counts$unit_id <- paste(sender_state_counts$replicate_id, sender_state_counts$state, sep = "__")
   sender_state_counts$n_cells <- vapply(seq_len(nrow(sender_state_counts)), function(i) {
     cc <- tumor_cells[meta[tumor_cells, "replicate_id"] == sender_state_counts$replicate_id[i] &
-      !is.na(st[tumor_cells]) & st[tumor_cells] == sender_state_counts$state[i]]
+                        !is.na(st[tumor_cells]) & st[tumor_cells] == sender_state_counts$state[i]]
     sender_state_cells[[sender_state_counts$unit_id[i]]] <<- cc
     length(cc)
   }, integer(1))
@@ -440,11 +366,11 @@ if (run_sender_state) {
       sender_DE <- as.data.frame(topTags(glmQLFTest(fit, coef = "stateInfected"), n = Inf, sort.by = "none")$table)
       sender_DE$gene <- rownames(sender_DE)
       sender_model <- list(samples = sm, pseudobulk = pb, design = design, normalization = y$samples,
-        residual_df = nrow(design) - qr(design)$rank)
+                           residual_df = nrow(design) - qr(design)$rank)
     } else sender_audit$DE_status <- "insufficient_tested_genes"
   }
 }
-# 绘图表达量不承担DE检验；每个动物、每种状态先独立汇总，再等权汇总生物重复。
+# 动物×状态表达汇总保留，用于方向检查；主图另用全部合格细胞，不承担DE检验。
 summarize_sender_expression <- function(genes) {
   if (!nrow(sender_state_counts)) return(data.frame())
   genes <- unique(genes)
@@ -459,13 +385,52 @@ summarize_sender_expression <- function(genes) {
       value[measured] <- as.numeric(Matrix::rowMeans(log1p(m)))
     }
     data.frame(replicate_id = as.character(z$replicate_id), state = as.character(z$state), gene = genes,
-      n_cells = z$n_cells, pair_eligible = z$pair_eligible, feature_measured = measured,
-      mean_log1p_CP10K = value, detected_fraction = detection)
+               n_cells = z$n_cells, pair_eligible = z$pair_eligible, feature_measured = measured,
+               mean_log1p_CP10K = value, detected_fraction = detection)
   }))
 }
 sender_expression <- summarize_sender_expression(target_gene)
 
-##### 绘图与阶段保存函数：组均值与SD，不添加方法性caption #####
+collect_sender_expression_cells <- function(genes) {
+  empty <- data.frame(cell = character(), sample_id = character(), replicate_id = character(),
+                      state = character(), gene = character(), feature_measured = logical(), log1p_CP10K = double(), detected = logical())
+  if (!nrow(sender_state_counts)) return(empty)
+  # 仅展开当前绘图选中的基因，避免保存全部先验配体×全部肿瘤细胞的大表。
+  library_size <- Matrix::colSums(host_counts)
+  rows <- list()
+  for (i in which(sender_state_counts$pair_eligible)) {
+    z <- sender_state_counts[i, ]; cc <- sender_state_cells[[z$unit_id]]
+    if (length(cc) < min_cells) next
+    for (g in unique(genes)) {
+      measured <- g %in% rownames(host_counts)
+      raw <- if (measured) as.numeric(host_counts[g, cc]) else rep(NA_real_, length(cc))
+      rows[[length(rows) + 1L]] <- data.frame(cell = cc, sample_id = meta[cc, "sample_id"],
+                                              replicate_id = as.character(z$replicate_id), state = as.character(z$state), gene = g,
+                                              feature_measured = measured, log1p_CP10K = log1p(10000 * raw / library_size[cc]),
+                                              detected = if (measured) raw > 0 else rep(NA, length(cc)), stringsAsFactors = FALSE)
+    }
+  }
+  if (length(rows)) bind_rows_base(rows) else empty
+}
+
+summarize_sender_pairs <- function(data) {
+  if (!nrow(data)) return(data.frame())
+  bind_rows_base(lapply(split(data, data$gene), function(z) {
+    a <- z[z$state == "Bystander" & is.finite(z$mean_log1p_CP10K), , drop = FALSE]
+    b <- z[z$state == "Infected" & is.finite(z$mean_log1p_CP10K), , drop = FALSE]
+    ids <- intersect(a$replicate_id, b$replicate_id)
+    difference <- b$mean_log1p_CP10K[match(ids, b$replicate_id)] - a$mean_log1p_CP10K[match(ids, a$replicate_id)]
+    enough <- length(ids) >= min_sender_pairs
+    data.frame(gene = z$gene[1], n_pairs = length(ids),
+               mean_difference_Infected_minus_Bystander = if (length(ids)) mean(difference) else NA_real_,
+               SD_difference = if (length(ids) >= 2L) sd(difference) else NA_real_,
+               direction_consistency = if (!enough) "insufficient_pairs" else if (all(difference > 0)) "all_pairs_up" else
+                 if (all(difference < 0)) "all_pairs_down" else "mixed_or_zero",
+               PValue = NA_real_, status = if (enough) "descriptive_no_test" else "insufficient_pairs")
+  }))
+}
+
+##### 绘图与阶段保存函数：逐细胞分布与动物层统计分开 #####
 theme_research <- theme_bw(base_size = 10, base_family = "sans") + theme(
   panel.grid = element_blank(), panel.border = element_rect(colour = "#454545", linewidth = 0.4),
   axis.ticks = element_line(colour = "#454545", linewidth = 0.35),
@@ -475,13 +440,13 @@ theme_research <- theme_bw(base_size = 10, base_family = "sans") + theme(
 empty_plot <- function(title, status) ggplot() + annotate("text", x = 0, y = 0, label = status, size = 4) +
   labs(title = title) + theme_void(base_family = "sans")
 ligand_results <- data.frame(receiver = character(), source = character(), unit = character(), replicate_id = character(),
-  target_rule = character(), direction = character(), ligand = character(), auroc = double(), aupr = double(), aupr_corrected = double(), pearson = double(),
-  rank = double(), rank_percentile = double(), n_candidates = integer(), n_scored = integer(), n_targets = integer(),
-  n_background = integer(), n_FDR_supported = integer(), score_status = character(), model_id = character(),
-  available_this_sample = logical(), available_Bystander = logical(), available_Infected = logical(),
-  rank_within_Bystander = double(), rank_within_Infected = double(),
-  n_available_Bystander = integer(), n_available_Infected = integer(), n_scored_Bystander = integer(), n_scored_Infected = integer(),
-  sender_logFC_Infected_minus_Bystander = double(), sender_P = double(), sender_FDR = double())
+                             target_rule = character(), direction = character(), ligand = character(), auroc = double(), aupr = double(), aupr_corrected = double(), pearson = double(),
+                             rank = double(), rank_percentile = double(), n_candidates = integer(), n_scored = integer(), n_targets = integer(),
+                             n_background = integer(), n_FDR_supported = integer(), score_status = character(), model_id = character(),
+                             available_this_sample = logical(), available_Bystander = logical(), available_Infected = logical(),
+                             rank_within_Bystander = double(), rank_within_Infected = double(),
+                             n_available_Bystander = integer(), n_available_Infected = integer(), n_scored_Bystander = integer(), n_scored_Infected = integer(),
+                             sender_logFC_Infected_minus_Bystander = double(), sender_P = double(), sender_FDR = double())
 model_audit <- data.frame(); candidate_availability <- data.frame(); target_tables <- list(); target_links <- data.frame()
 prior_info <- list(status = "not_loaded"); model_coverage <- data.frame()
 
@@ -493,10 +458,72 @@ summarize_biological_groups <- function(data, facet_col, value_col) {
   bind_rows_base(lapply(chunks, function(z) {
     value <- z[[value_col]][is.finite(z[[value_col]])]
     data.frame(receiver = if ("receiver" %in% names(z)) as.character(z$receiver[1]) else "all",
-      panel = as.character(z[[facet_col]][1]), condition = as.character(z$condition[1]),
-      n_total = nrow(z), n = length(value), mean = if (length(value)) mean(value) else NA_real_,
-      SD = if (length(value) >= 2L) sd(value) else NA_real_)
+               panel = as.character(z[[facet_col]][1]), condition = as.character(z$condition[1]),
+               n_total = nrow(z), n = length(value), mean = if (length(value)) mean(value) else NA_real_,
+               SD = if (length(value) >= 2L) sd(value) else NA_real_)
   }))
+}
+
+summarize_cell_groups <- function(data, facet_col, value_col) {
+  if (!nrow(data)) return(data.frame())
+  receiver_key <- if ("receiver" %in% names(data)) as.character(data$receiver) else "all"
+  chunks <- split(data, paste(receiver_key, data[[facet_col]], data$condition, sep = "\r"))
+  bind_rows_base(lapply(chunks, function(z) {
+    ok <- is.finite(z[[value_col]])
+    value <- z[[value_col]][ok]
+    data.frame(receiver = if ("receiver" %in% names(z)) as.character(z$receiver[1]) else "all",
+               panel = as.character(z[[facet_col]][1]), condition = as.character(z$condition[1]),
+               n_cells_total = nrow(z), n_cells_valid = length(value), n_animals = length(unique(z$replicate_id[ok])),
+               pooled_cell_mean = if (length(value)) mean(value) else NA_real_,
+               pooled_cell_median = if (length(value)) median(value) else NA_real_)
+  }))
+}
+
+plot_cell_violins <- function(data, facet_col, value_col, title, ylabel,
+                              group_levels = condition_levels, group_colors = condition_colors) {
+  if (!nrow(data) || !any(is.finite(data[[value_col]]))) {
+    return(empty_plot(title, "Not assessable: no eligible cells or measured features."))
+  }
+  data$panel <- factor(as.character(data[[facet_col]]), levels = unique(as.character(data[[facet_col]])))
+  data$condition <- factor(as.character(data$condition), levels = group_levels)
+  data$value <- data[[value_col]]
+  summary <- summarize_cell_groups(data, "panel", "value")
+  grid <- expand.grid(panel = levels(data$panel), condition = group_levels, stringsAsFactors = FALSE)
+  grid$n_animals <- summary$n_animals[match(paste(grid$panel, grid$condition), paste(summary$panel, summary$condition))]
+  grid$n_animals[is.na(grid$n_animals)] <- 0L
+  grid$panel <- factor(grid$panel, levels = levels(data$panel))
+  grid$condition <- factor(grid$condition, levels = group_levels)
+  valid <- data[is.finite(data$value), , drop = FALSE]
+  # 常数分数保留真实箱线/中位线；不为全零或单值组伪造小提琴密度。
+  density_groups <- split(valid, paste(valid$panel, valid$condition, sep = "\r"))
+  density <- bind_rows_base(Filter(function(z) nrow(z) >= 2L && length(unique(z$value)) >= 2L, density_groups))
+  p <- ggplot(mapping = aes(condition, value, fill = condition)) +
+    geom_blank(data = grid, aes(x = condition, y = NA_real_), inherit.aes = FALSE)
+  empty_panels <- setdiff(levels(data$panel), as.character(unique(valid$panel)))
+  if (length(empty_panels)) {
+    # 全NA面板没有可训练的纵轴；仅用同页实测范围定位NA文字，不生成零值或统计观测。
+    anchors <- expand.grid(panel = empty_panels, condition = group_levels[1],
+                           value = range(valid$value), stringsAsFactors = FALSE)
+    anchors$panel <- factor(anchors$panel, levels = levels(data$panel))
+    anchors$condition <- factor(anchors$condition, levels = group_levels)
+    p <- p + geom_blank(data = anchors, aes(x = condition, y = value), inherit.aes = FALSE)
+  }
+  if (nrow(density)) p <- p + geom_violin(data = density, width = 0.80, scale = "width", trim = TRUE,
+                                          colour = "#454545", linewidth = 0.35, alpha = 0.78)
+  p <- p + geom_boxplot(data = valid, width = 0.13, outlier.shape = NA,
+                        colour = "#454545", linewidth = 0.35, alpha = 0.9) +
+    facet_wrap(~ panel, ncol = 3, scales = "free_y", drop = FALSE) +
+    scale_x_discrete(limits = group_levels, drop = FALSE) +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.16))) +
+    scale_fill_manual(values = group_colors, limits = group_levels, drop = FALSE) +
+    labs(title = title, x = NULL, y = ylabel) + theme_research + theme(legend.position = "none")
+  incomplete <- grid[grid$n_animals < 2L, , drop = FALSE]
+  if (nrow(incomplete)) {
+    incomplete$label <- ifelse(incomplete$n_animals == 0L, "NA", "n = 1 animal")
+    p <- p + geom_text(data = incomplete, aes(x = condition, y = Inf, label = label),
+                       inherit.aes = FALSE, vjust = 1.2, colour = "#6D6F75", size = 3)
+  }
+  p
 }
 
 plot_biological_bars <- function(data, facet_col, value_col, title, ylabel,
@@ -520,7 +547,7 @@ plot_biological_bars <- function(data, facet_col, value_col, title, ylabel,
   p <- ggplot(summary, aes(x, mean, fill = condition)) +
     geom_col(width = 0.60, colour = "#454545", linewidth = 0.35, alpha = 0.78, na.rm = TRUE) +
     geom_errorbar(data = summary[is.finite(summary$SD), , drop = FALSE],
-      aes(ymin = lower, ymax = upper), width = 0.14, linewidth = 0.4, colour = "#454545") +
+                  aes(ymin = lower, ymax = upper), width = 0.14, linewidth = 0.4, colour = "#454545") +
     facet_wrap(~ panel, ncol = 3, scales = "free_y") +
     scale_x_continuous(breaks = seq_along(group_levels), labels = group_levels,
                        limits = c(0.5, length(group_levels) + 0.5)) +
@@ -528,46 +555,50 @@ plot_biological_bars <- function(data, facet_col, value_col, title, ylabel,
     scale_fill_manual(values = group_colors, limits = group_levels) +
     labs(title = title, x = NULL, y = ylabel) + theme_research + theme(legend.position = "none")
   if (show_replicate_points) p <- p + geom_point(data = points,
-    aes(x = x, y = value, colour = condition), inherit.aes = FALSE,
-    shape = 21, fill = "white", size = 2.2, stroke = 0.65) +
+                                                 aes(x = x, y = value, colour = condition), inherit.aes = FALSE,
+                                                 shape = 21, fill = "white", size = 2.2, stroke = 0.65) +
     scale_colour_manual(values = group_colors, limits = group_levels)
   if (any(summary$n == 0L)) p <- p + geom_text(data = summary[summary$n == 0L, ],
-    aes(x = x, y = 0, label = "NA"), inherit.aes = FALSE, colour = "#6D6F75", vjust = -0.4, size = 3)
+                                               aes(x = x, y = 0, label = "NA"), inherit.aes = FALSE, colour = "#6D6F75", vjust = -0.4, size = 3)
   if (any(summary$n == 1L)) p <- p + geom_text(data = summary[summary$n == 1L, ],
-    aes(x = x, y = mean, label = "n = 1"), inherit.aes = FALSE, colour = "#6D6F75", vjust = -0.8, size = 3)
+                                               aes(x = x, y = mean, label = "n = 1"), inherit.aes = FALSE, colour = "#6D6F75", vjust = -0.8, size = 3)
   p
 }
 
-draw_plots <- function() {
+select_sender_plot_genes <- function() {
+  genes <- target_gene
+  if (nrow(ligand_results) && "Tumor_states" %in% ligand_results$source) {
+    selected <- ligand_results[ligand_results$source == "Tumor_states" & ligand_results$unit == "group" &
+                                 ligand_results$target_rule == "Top_QLF" & is.finite(ligand_results$rank), , drop = FALSE]
+    genes <- unique(c(genes, unlist(lapply(split(selected, interaction(selected$receiver, selected$direction, drop = TRUE)),
+                                           function(z) head(z$ligand[order(z$rank)], 3L)), use.names = FALSE)))
+  }
+  genes
+}
+
+draw_plots <- function(sender_expression_cells) {
   pdf(file.path(outdir, "plots.pdf"), width = 12, height = 9, onefile = TRUE, useDingbats = FALSE)
   on.exit(dev.off())
   pp <- receiver_audit
   pp$plot_count <- ifelse(pp$annotation_status == "existing_label", pp$n_cells, NA_real_)
   print(plot_biological_bars(pp, "receiver", "plot_count", "Immune cells", "Cells with host counts"))
   for (receiver in names(receiver_definitions)) {
-    ss <- scores_summary[scores_summary$receiver == receiver, ]
-    if (!any(is.finite(ss$mean_score))) {
-      print(empty_plot(receiver, "Not assessable: check annotation, cell counts and signature coverage.")); next
-    }
-    print(plot_biological_bars(ss, "signature", "mean_score", receiver, "Mean UCell score"))
+    ss <- cell_scores[cell_scores$receiver == receiver, , drop = FALSE]
+    print(plot_cell_violins(ss, "signature", "score", receiver, "UCell score"))
   }
   if (run_sender_state) {
     if (!nrow(sender_expression) || !any(is.finite(sender_expression$mean_log1p_CP10K))) {
       print(empty_plot("Tumor sender states", paste("Not assessable:", sender_audit$status)))
     } else {
-      selected_genes <- target_gene
-      if (nrow(ligand_results) && "Tumor_states" %in% ligand_results$source) {
-        selected <- ligand_results[ligand_results$source == "Tumor_states" & ligand_results$unit == "group" &
-          ligand_results$target_rule == "Top_QLF" & is.finite(ligand_results$rank), ]
-        selected_genes <- unique(c(target_gene, unlist(lapply(split(selected, interaction(selected$receiver, selected$direction, drop = TRUE)),
-          function(z) head(z$ligand[order(z$rank)], 3L)), use.names = FALSE)))
-      }
+      selected_genes <- select_sender_plot_genes()
       se <- sender_expression[sender_expression$gene %in% selected_genes, , drop = FALSE]
       se$condition <- se$state
-      print(plot_biological_bars(se, "gene", "mean_log1p_CP10K", "Tumor sender expression", "Mean log1p(CP10K)",
-        sender_state_levels, sender_state_colors))
+      sc <- sender_expression_cells
+      sc$condition <- sc$state
+      print(plot_cell_violins(sc, "gene", "log1p_CP10K", "Tumor sender expression", "log1p(CP10K)",
+                              sender_state_levels, sender_state_colors))
       print(plot_biological_bars(se, "gene", "detected_fraction", "Tumor sender detection", "Detected fraction",
-        sender_state_levels, sender_state_colors))
+                                 sender_state_levels, sender_state_colors))
     }
   }
   if (nrow(ligand_results)) draw_ligand_plots()
@@ -576,47 +607,59 @@ save_stage <- function(stage) {
   count_data <- receiver_audit
   count_data$plot_count <- ifelse(count_data$annotation_status == "existing_label", count_data$n_cells, NA_real_)
   group_plot_summary <- list(scores = summarize_biological_groups(scores_summary, "signature", "mean_score"),
-    counts = summarize_biological_groups(count_data, "receiver", "plot_count"))
+                             counts = summarize_biological_groups(count_data, "receiver", "plot_count"))
+  group_plot_summary$score_cell_distributions <- summarize_cell_groups(cell_scores, "signature", "score")
+  sender_expression_cells <- collect_sender_expression_cells(select_sender_plot_genes())
+  sender_expression_contrasts <- summarize_sender_pairs(sender_expression)
   if (nrow(sender_expression)) {
     se <- sender_expression; se$condition <- se$state
     group_plot_summary$sender_expression <- summarize_biological_groups(se, "gene", "mean_log1p_CP10K")
     group_plot_summary$sender_detection <- summarize_biological_groups(se, "gene", "detected_fraction")
   }
+  if (nrow(sender_expression_cells)) {
+    sc <- sender_expression_cells; sc$condition <- sc$state
+    group_plot_summary$sender_cell_distributions <- summarize_cell_groups(sc, "gene", "log1p_CP10K")
+  }
   info <- list(stage = stage, started_at = as.character(started_at), finished_at = as.character(Sys.time()),
-    input_file = path.expand(input_file), input_object = input_object, analysis_label = analysis_label,
-    sample_table = sample_table, contrast = "VG161 - Vehicle", design = "independent groups; ~ condition",
-    receiver_definitions = receiver_definitions, tumor_labels = tumor_labels, annotation_audit = annotation_audit,
-    sender_state = sender_audit, sender_state_levels = sender_state_levels, min_sender_pairs = min_sender_pairs,
-    run_sender_state = run_sender_state, sender_state_col = sender_state_col,
-    host_prefix = host_prefix, viral_pattern = viral_pattern, viral_feature_ids = viral_feature_ids,
-    min_cells = min_cells, min_samples_per_condition = min_samples_per_condition,
-    min_signature_genes = min_signature_genes, min_signature_coverage = min_signature_coverage,
-    ucell_max_rank = min(ucell_max_rank, nrow(host_counts)), expression_fraction = expression_fraction,
-    filter_min_count = filter_min_count, filter_min_total_count = filter_min_total_count,
-    de_fdr = de_fdr, target_min_abs_logFC = target_min_abs_logFC, top_target_n = top_target_n,
-    min_target_genes = min_target_genes, min_background_genes = min_background_genes,
-    target_exclusion_genes = target_exclusion_genes, seed = seed, prior = prior_info,
-    plot_summary = "equal-weight biological replicate means; mean +/- sample SD; n < 2 has no SD",
-    show_replicate_points = show_replicate_points, show_sample_rank_diagnostics = show_sample_rank_diagnostics,
-    limits = c("Exploratory with two biological samples per condition.", "Broad Tcell/Myeloid states can reflect subtype composition.",
-      "NicheNet ranking has no ligand P/FDR and no activating/inhibitory sign.", "NCL specificity and surface localization are not established.",
-      "VG161 engineered payloads and shared host/payload feature names are not fully represented by this host prior."),
-    package_versions = vapply(c("Seurat", "SeuratObject", "Matrix", "UCell", "edgeR", "ggplot2", "curl"),
-       function(p) as.character(packageVersion(p)), character(1)), session = capture.output(sessionInfo()))
+               input_file = path.expand(input_file), input_object = input_object, analysis_label = analysis_label,
+               sample_table = sample_table, contrast = "VG161 - Vehicle", design = "independent groups; ~ condition",
+               receiver_definitions = receiver_definitions, tumor_labels = tumor_labels, annotation_audit = annotation_audit,
+               sender_state = sender_audit, sender_state_levels = sender_state_levels, min_sender_pairs = min_sender_pairs,
+               run_sender_state = run_sender_state, sender_state_col = sender_state_col,
+               host_prefix = host_prefix, viral_pattern = viral_pattern, viral_feature_ids = viral_feature_ids,
+               min_cells = min_cells, min_samples_per_condition = min_samples_per_condition,
+               min_signature_genes = min_signature_genes, min_signature_coverage = min_signature_coverage,
+               ucell_max_rank = min(ucell_max_rank, nrow(host_counts)), expression_fraction = expression_fraction,
+               filter_min_count = filter_min_count, filter_min_total_count = filter_min_total_count,
+               de_fdr = de_fdr, target_min_abs_logFC = target_min_abs_logFC, top_target_n = top_target_n,
+               min_target_genes = min_target_genes, min_background_genes = min_background_genes,
+               target_exclusion_genes = target_exclusion_genes, seed = seed, prior = prior_info,
+               plot_summary = "UCell and sender expression: all eligible cells pooled within condition/state; violin + boxplot; no cell-level P values",
+               plot_eligibility = "Receiver: animal has >= min_cells; sender: same VG161 animal passes min_cells in both tumor states",
+               animal_summary = "Equal-weight animal means retained in tables; counts/detection bars show mean +/- sample SD; n < 2 has no SD",
+               sender_plot_genes = select_sender_plot_genes(),
+               show_replicate_points = show_replicate_points, show_sample_rank_diagnostics = show_sample_rank_diagnostics,
+               limits = c("Exploratory with two biological samples per condition.", "Broad Tcell/Myeloid states can reflect subtype composition.",
+                          "NicheNet ranking has no ligand P/FDR and no activating/inhibitory sign.", "NCL specificity and surface localization are not established.",
+                          "VG161 engineered payloads and shared host/payload feature names are not fully represented by this host prior."),
+               package_versions = vapply(c("Seurat", "SeuratObject", "Matrix", "UCell", "edgeR", "ggplot2", "curl"),
+                                         function(p) as.character(packageVersion(p)), character(1)), session = capture.output(sessionInfo()))
   if (requireNamespace("nichenetr", quietly = TRUE)) info$package_versions <- c(info$package_versions, nichenetr = as.character(packageVersion("nichenetr")))
   write.csv(scores_summary, file.path(outdir, "scores.csv"), row.names = FALSE, na = "NA", fileEncoding = "UTF-8")
   write.csv(ligand_results, file.path(outdir, "ligands.csv"), row.names = FALSE, na = "NA", fileEncoding = "UTF-8")
-  saveRDS(list(info = info, scores = scores_summary, signatures = signatures, signature_coverage = signature_coverage,
-    score_contrasts = score_contrasts, signature_expression = signature_expression,
-    group_plot_summary = group_plot_summary, annotation_table = annotation_table,
-    sender_state_counts = sender_state_counts, sender_expression = sender_expression,
-    sender_DE = sender_DE, sender_model = sender_model,
-    receiver_audit = receiver_audit, cell_qc = cell_qc, layer_audit = layer_audit, viral_exclusion_audit = viral_exclusion_audit,
-    receiver_DE = de_results, receiver_models = de_models, DE_audit = de_audit,
-    ligands = ligand_results, model_audit = model_audit, candidate_availability = candidate_availability,
-    model_coverage = model_coverage, target_tables = target_tables, target_links = target_links),
-    file.path(outdir, "results.rds"), compress = TRUE)
-  draw_plots()
+  saveRDS(list(info = info, scores = scores_summary, cell_scores = cell_scores,
+               signatures = signatures, signature_coverage = signature_coverage,
+               score_contrasts = score_contrasts, signature_expression = signature_expression,
+               group_plot_summary = group_plot_summary, annotation_table = annotation_table,
+               sender_state_counts = sender_state_counts, sender_expression = sender_expression,
+               sender_expression_cells = sender_expression_cells, sender_expression_contrasts = sender_expression_contrasts,
+               sender_DE = sender_DE, sender_model = sender_model,
+               receiver_audit = receiver_audit, cell_qc = cell_qc, layer_audit = layer_audit, viral_exclusion_audit = viral_exclusion_audit,
+               receiver_DE = de_results, receiver_models = de_models, DE_audit = de_audit,
+               ligands = ligand_results, model_audit = model_audit, candidate_availability = candidate_availability,
+               model_coverage = model_coverage, target_tables = target_tables, target_links = target_links),
+          file.path(outdir, "results.rds"), compress = TRUE)
+  draw_plots(sender_expression_cells)
   message("已保存阶段：", stage, "；", normalizePath(outdir))
 }
 save_stage("immune_function_complete_NicheNet_pending")
@@ -663,7 +706,7 @@ draw_ligand_plots <- function() {
   for (receiver in unique(ligand_results$receiver)) for (source in unique(ligand_results$source)) {
     for (rule in c("FDR", "Top_QLF")) {
       zz <- ligand_results[ligand_results$receiver == receiver & ligand_results$source == source &
-        ligand_results$unit == "group" & ligand_results$target_rule == rule & is.finite(ligand_results$rank), ]
+                             ligand_results$unit == "group" & ligand_results$target_rule == rule & is.finite(ligand_results$rank), ]
       if (!nrow(zz)) next
       z <- bind_rows_base(lapply(split(zz, zz$direction), function(a) {
         a <- a[order(a$rank), ]; a[a$rank <= top_ligands_plot | a$ligand == target_gene, ]
@@ -672,25 +715,25 @@ draw_ligand_plots <- function() {
       z$display <- factor(paste(z$direction, z$ligand, sep = "::"),
                           levels = unique(paste(z$direction, z$ligand, sep = "::"))[rev(seq_len(nrow(z)))])
       print(ggplot(z, aes(aupr_corrected, display, fill = highlight)) + geom_col(width = 0.7) +
-        geom_vline(xintercept = 0, colour = "#656A70", linewidth = 0.25) +
-        facet_wrap(~ direction, ncol = 2, scales = "free_y") +
-        scale_y_discrete(labels = function(x) sub("^.*::", "", x)) +
-        scale_fill_manual(values = setNames(c("#C35B3F", "#426B91"), c(target_gene, "Other ligands"))) +
-        labs(title = paste(receiver, source, rule, sep = " | "), x = "AUPR corrected", y = NULL) +
-        theme_research + theme(legend.position = "top"))
+              geom_vline(xintercept = 0, colour = "#656A70", linewidth = 0.25) +
+              facet_wrap(~ direction, ncol = 2, scales = "free_y") +
+              scale_y_discrete(labels = function(x) sub("^.*::", "", x)) +
+              scale_fill_manual(values = setNames(c("#C35B3F", "#426B91"), c(target_gene, "Other ligands"))) +
+              labs(title = paste(receiver, source, rule, sep = " | "), x = "AUPR corrected", y = NULL) +
+              theme_research + theme(legend.position = "top"))
       if (source == "Tumor_states") {
         availability <- bind_rows_base(lapply(sender_state_levels, function(state) data.frame(
           display = z$display, direction = z$direction, state = state,
           available = z[[paste0("available_", state)]])))
         availability$state <- factor(availability$state, levels = sender_state_levels)
         print(ggplot(availability, aes(state, display, fill = available)) +
-          geom_tile(colour = "white", linewidth = 0.4, width = 0.85, height = 0.85) +
-          facet_wrap(~ direction, ncol = 2, scales = "free_y") +
-          scale_y_discrete(labels = function(x) sub("^.*::", "", x)) +
-          scale_fill_manual(values = c(`TRUE` = "#426B91", `FALSE` = "#DDE1E4"),
-            breaks = c(TRUE, FALSE), labels = c("Available", "Unavailable"), na.value = "#B8BDC3") +
-          labs(title = paste(receiver, "Tumor ligand availability", rule, sep = " | "), x = NULL, y = NULL) +
-          theme_research + theme(legend.position = "top"))
+                geom_tile(colour = "white", linewidth = 0.4, width = 0.85, height = 0.85) +
+                facet_wrap(~ direction, ncol = 2, scales = "free_y") +
+                scale_y_discrete(labels = function(x) sub("^.*::", "", x)) +
+                scale_fill_manual(values = c(`TRUE` = "#426B91", `FALSE` = "#DDE1E4"),
+                                  breaks = c(TRUE, FALSE), labels = c("Available", "Unavailable"), na.value = "#B8BDC3") +
+                labs(title = paste(receiver, "Tumor ligand availability", rule, sep = " | "), x = NULL, y = NULL) +
+                theme_research + theme(legend.position = "top"))
       }
     }
     if (!show_sample_rank_diagnostics) next
@@ -714,7 +757,7 @@ draw_ligand_plots <- function() {
       theme_research + theme(axis.text.x = element_text(angle = 35, hjust = 1), legend.position = "right", legend.title = element_text())
     unavailable <- z[!is.na(z$available_this_sample) & !z$available_this_sample & is.finite(z$rank), ]
     if (nrow(unavailable)) p <- p + geom_point(data = unavailable, aes(shape = "Unavailable in sample"),
-      colour = "#C35B3F", size = 2, stroke = 0.7, position = position_nudge(x = 0.24, y = 0.23)) +
+                                               colour = "#C35B3F", size = 2, stroke = 0.7, position = position_nudge(x = 0.24, y = 0.23)) +
       scale_shape_manual(values = c("Unavailable in sample" = 4), name = NULL)
     print(p)
   }
@@ -737,12 +780,12 @@ if (run_nichenet && length(de_models)) {
   lr_network$from <- as.character(lr_network$from); lr_network$to <- as.character(lr_network$to)
   lr_network <- lr_network[!is.na(lr_network$from) & !is.na(lr_network$to) & nzchar(lr_network$from) & nzchar(lr_network$to), ]
   prior_info <- list(status = "loaded", model = "NicheNet human final v2; Zenodo 7074291", files = model_manifest,
-    matrix_dimensions = dim(ligand_target_matrix), n_LR = nrow(lr_network))
+                     matrix_dimensions = dim(ligand_target_matrix), n_LR = nrow(lr_network))
   model_coverage <- data.frame(ligand = target_gene, receptor = c("NCL", "LRP1", "SDC4", "PTPRZ1", "ALK"))
   model_coverage$ligand_in_LT <- target_gene %in% colnames(ligand_target_matrix)
   model_coverage$pair_in_LR <- vapply(model_coverage$receptor, function(r) any(lr_network$from == target_gene & lr_network$to == r), logical(1))
   message("固定模型MDK–NCL覆盖：", model_coverage$pair_in_LR[model_coverage$receptor == "NCL"], "；不补造网络未覆盖的边。")
-
+  
   ##### 各样本发送端和接收端表达：不按发送端DEG筛候选 #####
   expressed <- function(cells) {
     if (length(cells) < min_cells) return(character())
@@ -756,7 +799,7 @@ if (run_nichenet && length(de_models)) {
     by_type <- split(cc, as.character(meta[cc, celltype_col]))
     source_genes <- lapply(by_type, expressed)
     sender_expressed_genes[[id]] <- list(All_sources = unique(unlist(source_genes, use.names = FALSE)),
-      Tumor = expressed(cc[meta[cc, celltype_col] %in% tumor_labels]))
+                                         Tumor = expressed(cc[meta[cc, celltype_col] %in% tumor_labels]))
   }
   candidate_rows <- list(); audit_rows <- list(); ligand_rows <- list(); link_rows <- list()
   model_index <- 0L
@@ -766,8 +809,8 @@ if (run_nichenet && length(de_models)) {
     background <- setdiff(intersect(de$gene, rownames(ligand_target_matrix)), target_exclusion_genes)
     if (length(background) < min_background_genes) {
       audit_rows[[length(audit_rows) + 1L]] <- data.frame(receiver = receiver, source = "All", unit = "group", replicate_id = NA_character_,
-        target_rule = "all", direction = "Both", n_targets = NA_integer_, n_background = length(background), n_candidates = NA_integer_,
-        n_FDR_supported = NA_integer_, status = "insufficient_prior_background", model_id = NA_character_)
+                                                          target_rule = "all", direction = "Both", n_targets = NA_integer_, n_background = length(background), n_candidates = NA_integer_,
+                                                          n_FDR_supported = NA_integer_, status = "insufficient_prior_background", model_id = NA_character_)
       next
     }
     if (length(background) < 5000L) warning(receiver, " 的receiver先验背景少于5000基因；100只是计算门槛，请检查物种、ID和覆盖。")
@@ -821,39 +864,39 @@ if (run_nichenet && length(de_models)) {
       for (id in rownames(mm)) {
         all_prior_ligands <- sort(intersect(colnames(lt), unique(lr_network$from)))
         candidate_rows[[length(candidate_rows) + 1L]] <- data.frame(receiver = receiver, source = source,
-          replicate_id = id, condition = as.character(mm[id, "condition"]), ligand = all_prior_ligands,
-          sender_expressed = if (source == "Tumor_states" && !id %in% state_ids) NA else if (source == "Tumor_states") {
-            genes <- unique(unlist(lapply(sender_state_levels, function(state)
-              expressed(sender_state_cells[[paste(id, state, sep = "__")]])), use.names = FALSE))
-            all_prior_ligands %in% genes
-          } else
-            all_prior_ligands %in% sender_expressed_genes[[id]][[source]],
-          receiver_compatible = all_prior_ligands %in% lr_network$from[lr_network$to %in% receptor_expression[[id]]],
-          available_this_sample = all_prior_ligands %in% available[[id]],
-          supported_in_Vehicle = if (source == "Tumor_states") NA else all_prior_ligands %in% common_by_condition$Vehicle,
-          supported_in_VG161 = all_prior_ligands %in% common_by_condition$VG161,
-          available_Bystander = if (source == "Tumor_states" && id %in% state_ids) all_prior_ligands %in% available_by_state$Bystander[[id]] else NA,
-          available_Infected = if (source == "Tumor_states" && id %in% state_ids) all_prior_ligands %in% available_by_state$Infected[[id]] else NA,
-          in_fixed_candidate_universe = all_prior_ligands %in% candidates)
+                                                                    replicate_id = id, condition = as.character(mm[id, "condition"]), ligand = all_prior_ligands,
+                                                                    sender_expressed = if (source == "Tumor_states" && !id %in% state_ids) NA else if (source == "Tumor_states") {
+                                                                      genes <- unique(unlist(lapply(sender_state_levels, function(state)
+                                                                        expressed(sender_state_cells[[paste(id, state, sep = "__")]])), use.names = FALSE))
+                                                                      all_prior_ligands %in% genes
+                                                                    } else
+                                                                      all_prior_ligands %in% sender_expressed_genes[[id]][[source]],
+                                                                    receiver_compatible = all_prior_ligands %in% lr_network$from[lr_network$to %in% receptor_expression[[id]]],
+                                                                    available_this_sample = all_prior_ligands %in% available[[id]],
+                                                                    supported_in_Vehicle = if (source == "Tumor_states") NA else all_prior_ligands %in% common_by_condition$Vehicle,
+                                                                    supported_in_VG161 = all_prior_ligands %in% common_by_condition$VG161,
+                                                                    available_Bystander = if (source == "Tumor_states" && id %in% state_ids) all_prior_ligands %in% available_by_state$Bystander[[id]] else NA,
+                                                                    available_Infected = if (source == "Tumor_states" && id %in% state_ids) all_prior_ligands %in% available_by_state$Infected[[id]] else NA,
+                                                                    in_fixed_candidate_universe = all_prior_ligands %in% candidates)
       }
-
+      
       ##### 分开评估FDR目标、预先声明的探索目标与逐样本响应 #####
       run_specs <- list()
       for (direction in c("Up", "Down")) {
         sign_use <- if (direction == "Up") 1 else -1
         ok_genes <- background[sign_use * de[background, "logFC"] >= target_min_abs_logFC &
-                                sign_use * de[background, "rank_stat"] > 0]
+                                 sign_use * de[background, "rank_stat"] > 0]
         ranked <- ok_genes[order(-sign_use * de[ok_genes, "rank_stat"], ok_genes)]
         run_specs[[length(run_specs) + 1L]] <- list(unit = "group", id = NA_character_, rule = "FDR", direction = direction,
-          genes = ranked[de[ranked, "FDR"] < de_fdr])
+                                                    genes = ranked[de[ranked, "FDR"] < de_fdr])
         run_specs[[length(run_specs) + 1L]] <- list(unit = "group", id = NA_character_, rule = "Top_QLF", direction = direction,
-          genes = head(ranked, top_target_n))
+                                                    genes = head(ranked, top_target_n))
         for (id in rownames(mm)[mm$condition == "VG161"]) {
           lfc <- sample_effect[, id]
           keep <- names(lfc)[is.finite(lfc) & sign_use * lfc >= target_min_abs_logFC & sign_use * lfc > 0]
           keep <- keep[order(-sign_use * lfc[keep], keep)]
           run_specs[[length(run_specs) + 1L]] <- list(unit = "sample", id = id, rule = "Sample_top_effect", direction = direction,
-            genes = head(keep, top_target_n))
+                                                      genes = head(keep, top_target_n))
         }
       }
       for (spec in run_specs) {
@@ -865,15 +908,15 @@ if (run_nichenet && length(de_models)) {
         status <- if (length(targets) < min_target_genes) "insufficient_targets" else if (length(background) - length(targets) < min_target_genes) "insufficient_non_targets" else
           if (length(candidates) < min_candidate_ligands) "insufficient_candidates" else "assessed"
         audit_rows[[length(audit_rows) + 1L]] <- data.frame(receiver = receiver, source = source, unit = spec$unit,
-          replicate_id = spec$id, target_rule = spec$rule, direction = spec$direction, n_targets = length(targets),
-          n_background = length(background), n_candidates = length(candidates), n_FDR_supported = fdr_supported, status = status, model_id = model_id)
+                                                            replicate_id = spec$id, target_rule = spec$rule, direction = spec$direction, n_targets = length(targets),
+                                                            n_background = length(background), n_candidates = length(candidates), n_FDR_supported = fdr_supported, status = status, model_id = model_id)
         target_tables[[model_id]] <- data.frame(gene = targets, group_logFC = de[targets, "logFC"],
-          group_P = de[targets, "PValue"], group_FDR = de[targets, "FDR"],
-          sample_logCPM_difference = if (spec$unit == "sample") sample_effect[targets, spec$id] else rep(NA_real_, length(targets)))
+                                                group_P = de[targets, "PValue"], group_FDR = de[targets, "FDR"],
+                                                sample_logCPM_difference = if (spec$unit == "sample") sample_effect[targets, spec$id] else rep(NA_real_, length(targets)))
         if (status != "assessed") next
         informative <- candidates[vapply(candidates, function(lig) stats::sd(lt[, lig]) > 0, logical(1))]
         activity <- if (length(informative)) as.data.frame(nichenetr::predict_ligand_activities(
-            geneset = targets, background_expressed_genes = background, ligand_target_matrix = lt,
+          geneset = targets, background_expressed_genes = background, ligand_target_matrix = lt,
           potential_ligands = informative, single = TRUE)) else data.frame(test_ligand = character(), auroc = double(), aupr = double(), aupr_corrected = double(), pearson = double())
         out <- data.frame(ligand = candidates, stringsAsFactors = FALSE)
         ix <- match(out$ligand, activity$test_ligand)
@@ -915,7 +958,7 @@ if (run_nichenet && length(de_models)) {
           w <- lt[targets, lig]; w <- sort(w[is.finite(w) & w > 0], decreasing = TRUE)
           w <- head(w, top_target_links)
           if (length(w)) link_rows[[length(link_rows) + 1L]] <- data.frame(model_id = model_id, receiver = receiver,
-            source = source, ligand = lig, target = names(w), regulatory_potential = as.numeric(w))
+                                                                           source = source, ligand = lig, target = names(w), regulatory_potential = as.numeric(w))
         }
         message(receiver, "/", source, "/", spec$unit, "/", spec$rule, "/", spec$direction, ": ", length(candidates), "个候选。")
       }
@@ -933,4 +976,4 @@ if (run_nichenet && length(de_models)) {
   prior_info$status <- if (!run_nichenet) "disabled_by_configuration" else "no_receiver_with_sufficient_samples"
   save_stage(if (!run_nichenet) "immune_function_only" else "NicheNet_not_assessable")
 }
-message("完成：scores.csv、ligands.csv、plots.pdf、results.rds。功能及发送端表达按生物重复均值±SD展示；NicheNet分数没有配体P/FDR。")
+message("完成：scores.csv、ligands.csv、plots.pdf、results.rds。总体Tcell/Myeloid功能及肿瘤发送端表达使用合并细胞小提琴；基因DE保留动物重复，NicheNet没有配体活性P/FDR。")
