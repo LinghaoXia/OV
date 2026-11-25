@@ -21,6 +21,7 @@ script_args <- grep("^--file=", commandArgs(), value = TRUE)
 source_files <- unlist(lapply(sys.frames(), function(z) z$ofile), use.names = FALSE)
 script_file <- if (length(source_files)) tail(source_files, 1L) else if (length(script_args)) sub("^--file=", "", script_args[1L]) else ""
 code_dir <- if (nzchar(script_file)) dirname(normalizePath(script_file, winslash = "/", mustWork = TRUE)) else if (file.exists("code/scRNA_MDK_knockout.R")) normalizePath("code", winslash = "/") else getwd()
+function_file <- if (.Platform$OS.type == "windows") file.path(code_dir, "new_function.R") else "/home/xialinghao/code/new_function.R"
 hallmark_gmt <- file.path(code_dir, "gene_sets", "hallmark.gmt")
 gobp_gmt <- file.path(code_dir, "gene_sets", "gobp.gmt")
 gmt_version <- "MSigDB 2026.1.Hs / human symbols"
@@ -72,6 +73,15 @@ immune_regex <- paste(c("IMMUN", "LYMPHOCYTE", "LEUKOCYTE", "T_CELL", "B_CELL", 
                         "COMPLEMENT", "PHAGOCYT", "RESPONSE_TO_VIRUS", "ANTIMICROBIAL", "DEFENSE_RESPONSE",
                         "INTERSPECIES", "MODULATION_OF_PROCESS_OF_ANOTHER_ORGANISM"), collapse = "|")
 condition_colors <- c(Vehicle = "#426B91", VG161 = "#C35B3F")
+
+##### 加载自定义绘图函数 #####
+function_file <- path.expand(function_file)
+if (!file.exists(function_file)) stop("找不到自定义函数文件：", function_file, call. = FALSE)
+mdk_functions <- new.env(parent = environment())
+source(function_file, local = mdk_functions, encoding = "UTF-8")
+if (!exists("write_mdk_plots", envir = mdk_functions, mode = "function", inherits = FALSE)) {
+  stop("请先将项目new_function.R中的MDK绘图函数合并到：", function_file, call. = FALSE)
+}
 
 ##### 辅助函数与配置校验 #####
 read_sce <- function(path, object_name) {
@@ -481,7 +491,7 @@ info <- list(started_at = started_at, finished_at = finished_at,
                                max_extra_immune_pathways = max_extra_immune_pathways, condition_colors = condition_colors, host_prefix = host_prefix,
                                viral_pattern = viral_pattern, viral_feature_ids = viral_feature_ids),
              gene_sets = list(source = gmt_source, version = resolved_gmt_version, paths = gmt_paths, md5 = tools::md5sum(gmt_paths)),
-             figures = list(top_genes_per_group = 20L, rank_metric = "distance", volcano_axes = "Z and -log10(model FDR)",
+             figures = list(function_file = function_file, top_genes_per_group = 20L, rank_metric = "distance", volcano_axes = "Z and -log10(model FDR)",
                             max_WT_neighbors_per_group = 8L, network_selection = "Nonzero MDK WT edges to genes below model FDR, ranked by absolute weight",
                             functional_display = "Up to 6 terms per group per method, union shown with both groups; ORA hit fraction > 0, GSEA NES >= 1",
                             order = "Top genes, volcano, WT network, functional ORA and GSEA, immune delta NES, GSEA and ORA"),
@@ -504,8 +514,8 @@ writeLines(c("D3 tumor-cell MDK virtual knockout", capture.output(str(info, max.
              "", "MODEL AUDIT", capture.output(str(model_audit)), "", "SESSION", info$session),
            file.path(outdir, "info.txt"), useBytes = TRUE)
 # 表格和RDS先写入，绘图可直接从results.rds续跑。
-source(file.path(code_dir, "scRNA_MDK_knockout_figures.R"), local = TRUE, encoding = "UTF-8")
-write_mdk_plots(results, file.path(outdir, "plots.pdf"))
+mdk_functions$write_mdk_plots(results, file.path(outdir, "plots.pdf"))
 message("已保存：", normalizePath(outdir, winslash = "/"))
 if (any(vapply(ko_results, function(z) z$status != "ok", logical(1)))) warning("部分模型不可评估，详见results.rds$model_audit与info.txt；NA不解释为无效应。")
+
 
