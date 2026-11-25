@@ -69,9 +69,9 @@ focus_pathways <- c(
 immune_regex <- paste(c("IMMUN", "LYMPHOCYTE", "LEUKOCYTE", "T_CELL", "B_CELL", "MYELOID",
                         "MACROPHAGE", "MONOCYTE", "DENDRITIC", "NEUTROPHIL", "NATURAL_KILLER", "NK_CELL",
                         "ANTIGEN", "CYTOKINE", "CHEMOKINE", "CHEMOTAXIS", "INFLAMMAT", "INTERFERON",
-                        "COMPLEMENT", "PHAGOCYT", "RESPONSE_TO_VIRUS"), collapse = "|")
+                        "COMPLEMENT", "PHAGOCYT", "RESPONSE_TO_VIRUS", "ANTIMICROBIAL", "DEFENSE_RESPONSE",
+                        "INTERSPECIES", "MODULATION_OF_PROCESS_OF_ANOTHER_ORGANISM"), collapse = "|")
 condition_colors <- c(Vehicle = "#426B91", VG161 = "#C35B3F")
-strip_color <- "#276C9F" # 两组展示相同的通路主题，共用标题条样式。
 
 ##### 辅助函数与配置校验 #####
 read_sce <- function(path, object_name) {
@@ -300,6 +300,7 @@ if (any(!focus_pathways %in% names(pathways))) warning("部分预设通路不在
 
 ##### 分组构建WT网络并虚拟敲除MDK #####
 ko_results <- setNames(vector("list", length(condition_levels)), condition_levels)
+network_edges_by_group <- setNames(vector("list", length(condition_levels)), condition_levels)
 for (j in seq_along(condition_levels)) {
   group <- condition_levels[j]
   message("开始 ", group, " MDK虚拟敲除……")
@@ -348,6 +349,11 @@ for (j in seq_along(condition_levels)) {
   dr$target <- dr$gene == target_gene
   dr$rank_percentile <- NA_real_
   if (status == "ok") {
+    # 仅保存实际WT网络中MDK的非零出边，精简结果无需保留完整邻接矩阵。
+    neighbors <- setdiff(colnames(wt), target_gene)
+    nonzero <- outgoing != 0
+    network_edges_by_group[[group]] <- data.frame(condition = group, source = target_gene,
+                                                  target = neighbors[nonzero], weight = outgoing[nonzero], stringsAsFactors = FALSE)
     k <- which(!dr$target)
     dr$rank_percentile[k] <- (rank(dr$distance[k], ties.method = "average") - 1) / (length(k) - 1)
   }
@@ -452,50 +458,6 @@ delta$label <- display$label[match(delta$pathway, display$pathway)]
 
 ##### 绘图与精简保存 #####
 dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
-base_theme <- theme_bw(base_size = 10, base_family = "sans") +
-  theme(panel.grid = element_blank(), panel.border = element_rect(colour = "#41464B", linewidth = .4),
-        axis.ticks = element_line(colour = "#41464B", linewidth = .35),
-        plot.title = element_text(size = 11, face = "bold"),
-        strip.background = element_rect(fill = strip_color, colour = NA),
-        strip.text = element_text(colour = "white", size = 10), legend.position = "right")
-max_NES <- if (any(is.finite(display$NES))) max(display$NES, na.rm = TRUE) else 1
-max_NES <- max(1, max_NES)
-p_overview <- ggplot(display, aes(x = NES, y = label)) +
-  geom_col(aes(fill = condition), width = .65, na.rm = TRUE) +
-  geom_text(aes(x = max_NES * 1.27, label = FDR_label), size = 2.7) +
-  geom_text(data = display[!is.finite(display$NES), , drop = FALSE], aes(x = .03, label = "NA"), hjust = 0, colour = "#6D6F75", size = 3) +
-  annotate("text", x = max_NES * 1.27, y = Inf, label = "FDR", vjust = 1.2, size = 3) +
-  facet_wrap(~condition, nrow = 1) + scale_fill_manual(values = condition_colors, guide = "none") +
-  scale_x_continuous(limits = c(0, max_NES * 1.4), expand = expansion(mult = c(0, .01))) +
-  labs(x = "Perturbation enrichment (NES)", y = NULL, title = "Immune pathways") + base_theme
-delta_limit <- if (any(is.finite(delta$delta_NES))) max(abs(delta$delta_NES), na.rm = TRUE) else 1
-delta_limit <- max(.1, delta_limit)
-p_delta <- ggplot(delta, aes(x = delta_NES, y = label)) +
-  geom_vline(xintercept = 0, colour = "#6D6F75", linewidth = .3) +
-  geom_col(aes(fill = delta_NES), width = .65, na.rm = TRUE) +
-  geom_text(data = delta[!is.finite(delta$delta_NES), , drop = FALSE], aes(x = 0, label = "NA"), colour = "#6D6F75", size = 3) +
-  scale_fill_gradient2(low = "#426B91", mid = "#F7F7F5", high = "#C35B3F", midpoint = 0,
-                       limits = c(-delta_limit, delta_limit), name = "Delta NES") +
-  scale_x_continuous(limits = c(-delta_limit * 1.1, delta_limit * 1.1)) +
-  labs(x = "VG161 - Vehicle (perturbation NES)", y = NULL, title = "Relative perturbation enrichment") + base_theme
-# 共同背景的相对受扰百分位只用于图示，不冒充表达或功能活性。
-immune_genes <- setdiff(unique(unlist(measured_pathways[pathway_catalog$immune], use.names = FALSE)), target_gene)
-gene_display <- genes[genes$gene %in% immune_genes, , drop = FALSE]
-if (nrow(gene_display) && any(is.finite(gene_display$rank_percentile))) {
-  max_rank <- tapply(gene_display$rank_percentile, gene_display$gene, function(z) if (any(is.finite(z))) max(z, na.rm = TRUE) else NA_real_)
-  chosen <- names(head(sort(max_rank, decreasing = TRUE, na.last = NA), 25L))
-  gene_display <- gene_display[gene_display$gene %in% chosen, , drop = FALSE]
-  gene_display$gene <- factor(gene_display$gene, levels = rev(chosen))
-  gene_display$condition <- factor(gene_display$condition, levels = condition_levels)
-  p_genes <- ggplot(gene_display, aes(condition, gene, fill = rank_percentile)) +
-    geom_tile(colour = "white", linewidth = .3) +
-    scale_fill_gradientn(colours = c("#F3F7FB", "#91B3CB", "#2D5375"), limits = c(0, 1),
-                         na.value = "#B8BDC3", name = "Perturbation\npercentile") +
-    labs(x = NULL, y = NULL, title = "Immune-associated genes") + base_theme
-} else p_genes <- ggplot() + annotate("text", x = 0, y = 0, label = "Immune-associated genes: NA") + theme_void()
-pdf_file <- file.path(outdir, "plots.pdf")
-grDevices::pdf(pdf_file, width = 12, height = max(8, length(display_ids) * .32 + 1.5), useDingbats = FALSE)
-tryCatch({ print(p_delta); print(p_overview); print(p_genes) }, finally = grDevices::dev.off())
 summary$model_status <- vapply(summary$condition, function(g) ko_results[[g]]$status, character(1))
 summary$n_network_genes <- length(network_genes)
 summary$n_MDK_outgoing <- vapply(summary$condition, function(g) ko_results[[g]]$n_MDK_outgoing, integer(1))
@@ -516,9 +478,13 @@ info <- list(started_at = started_at, finished_at = finished_at,
                                gene_fdr = gene_fdr, pathway_fdr = pathway_fdr, minSize = pathway_min_size, maxSize = pathway_max_size,
                                scoreType = "pos", gsea_nPermSimple = gsea_nperm_simple, gsea_eps = gsea_eps,
                                focus_pathways = focus_pathways, immune_regex = immune_regex, display_min_NES = display_min_NES,
-                               max_extra_immune_pathways = max_extra_immune_pathways, host_prefix = host_prefix,
+                               max_extra_immune_pathways = max_extra_immune_pathways, condition_colors = condition_colors, host_prefix = host_prefix,
                                viral_pattern = viral_pattern, viral_feature_ids = viral_feature_ids),
              gene_sets = list(source = gmt_source, version = resolved_gmt_version, paths = gmt_paths, md5 = tools::md5sum(gmt_paths)),
+             figures = list(top_genes_per_group = 20L, rank_metric = "distance", volcano_axes = "Z and -log10(model FDR)",
+                            max_WT_neighbors_per_group = 8L, network_selection = "Nonzero MDK WT edges to genes below model FDR, ranked by absolute weight",
+                            functional_display = "Up to 6 terms per group per method, union shown with both groups; ORA hit fraction > 0, GSEA NES >= 1",
+                            order = "Top genes, volcano, WT network, functional ORA and GSEA, immune delta NES, GSEA and ORA"),
              interpretation = c("Pooled group models: no animal-level KO treatment test",
                                 "Unsigned distance: enrichment indicates perturbation concentration, not activation/suppression",
                                 "Delta NES is descriptive model sensitivity; not an interaction test or expression difference",
@@ -531,10 +497,15 @@ model_audit <- lapply(ko_results, function(z) z[setdiff(names(z), "genes")])
 results <- list(info = info, summary = summary, genes = genes, pathways = pathway_table,
                 display = display, delta = delta, model_audit = model_audit, cell_audit = cell_audit,
                 layer_audit = layer_audit, viral_exclusion = viral_exclusion, gene_selection = gene_selection,
-                network_genes = network_genes, enrichment_universe = universe)
+                network_genes = network_genes, enrichment_universe = universe,
+                network_edges = bind_tables(network_edges_by_group))
 saveRDS(results, file.path(outdir, "results.rds"), compress = "xz")
 writeLines(c("D3 tumor-cell MDK virtual knockout", capture.output(str(info, max.level = 3)),
              "", "MODEL AUDIT", capture.output(str(model_audit)), "", "SESSION", info$session),
            file.path(outdir, "info.txt"), useBytes = TRUE)
+# 表格和RDS先写入，绘图可直接从results.rds续跑。
+source(file.path(code_dir, "scRNA_MDK_knockout_figures.R"), local = TRUE, encoding = "UTF-8")
+write_mdk_plots(results, file.path(outdir, "plots.pdf"))
 message("已保存：", normalizePath(outdir, winslash = "/"))
 if (any(vapply(ko_results, function(z) z$status != "ok", logical(1)))) warning("部分模型不可评估，详见results.rds$model_audit与info.txt；NA不解释为无效应。")
+
